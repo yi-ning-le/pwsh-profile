@@ -1,0 +1,191 @@
+# PowerShell Profile
+
+A fast personal PowerShell profile for Windows / PowerShell 7.
+
+This repo keeps the profile portable without hiding missing dependencies. Modern CLI tools such as `eza`, `bat`, and `rg` are explicit requirements; if they are not installed, the related commands should fail visibly.
+
+## What It Includes
+
+- Two-line p10k classic-inspired prompt with gray Powerline segments.
+- Smart path shortening with project-root awareness.
+- Async git prompt cache with branch, dirty state, stash, conflict, and merge/rebase/cherry-pick/revert state.
+- Git branch detection uses Git plumbing, so both files and reftable ref backends work.
+- Right-aligned toolchain versions and command duration when the terminal is wide enough.
+- PSReadLine history suggestions, prefix history search, and menu completion for interactive sessions.
+- Slash-style path display in completion results, plus substring fallback path completion.
+- Carapace external command completion and status-aware git path completion.
+- `fnm` Node.js auto-switching plus lazy default initialization for `node`, `npm`, `npx`, `pnpm`, `yarn`, and `corepack`.
+- Oh-my-zsh-style git aliases and directory navigation shortcuts.
+- Unix muscle-memory helpers such as `which`, `whereis`, `touch`, `mkcd`, `head`, `tail`, `export`, `env`, `open`, `df`, `refreshenv`, and `reload`.
+- Direct modern CLI wrappers:
+  - `ls`, `l`, `ll`, `la`, `lt` use `eza`.
+  - `cat` uses `bat`.
+  - `grep` uses `rg`.
+- PowerShell's default `curl` / `wget` aliases are removed so real executables resolve from `PATH`.
+
+## Project Structure
+
+```text
+profile/Microsoft.PowerShell_profile.ps1      entrypoint installed to $PROFILE.CurrentUserCurrentHost
+profile/profile.d/10-prompt.ps1              prompt, async cache orchestration, background process helper
+profile/profile.d/20-node.ps1                fnm integration and lazy Node command initialization
+profile/profile.d/25-icons.ps1               on-demand Terminal-Icons helper
+profile/profile.d/30-psreadline.ps1          PSReadLine options, keybindings, duration tracking
+profile/profile.d/40-completion.ps1          path completion, carapace cache, git path completion
+profile/profile.d/50-aliases.ps1             eza/bat/rg wrappers, git aliases, navigation helpers
+profile/profile.d/60-utils.ps1               small Unix-style utility functions
+profile/profile.d/prompt-updaters/*.ps1      async git/toolchain updater scripts
+scripts/install.ps1                          install/sync local profile files
+scripts/test-profile.ps1                     parser, policy, and startup benchmark checks
+packages/winget.ps1                          optional dependency installer
+```
+
+## Prompt Layout
+
+Wide terminals keep primary context on the left and auxiliary context on the right.
+
+![Prompt screenshot](docs/prompt-screenshot.png)
+
+Markdown-native sketch, using broadly supported Unicode/ASCII characters instead of Nerd Font private-use glyphs:
+
+```text
+~/.../pwsh-profile/src › git main +2 !1 ?3 ⇡1 ≡1 ▶        ◀ node 20.12.2 │ py 3.12.4 │ 12.8s
+❯
+```
+
+The real terminal prompt uses Nerd Font icons and Powerline separators. The screenshot above shows the intended rendering; the text sketch remains readable in Markdown viewers without Nerd Font support. The second-line symbol is green after success and red after failure.
+
+Narrow terminals hide the right side first, so path and git state remain visible.
+
+Git status symbols:
+
+- `+N`: staged files
+- `!N`: modified files
+- `?N`: untracked files
+- `xN`: deleted files
+- `»N`: renamed files
+- `⇡N` / `⇣N`: ahead / behind
+- `≡N`: stash entries
+- `✖N`: conflicts
+- `rebasing`, `merging`, `cherry-picking`, `reverting`: active git operation
+
+Ahead/behind counts are based on local refs. Run `git fetch` when you want `⇡N` / `⇣N` to reflect the remote's latest state.
+
+Command duration is shown only for slower commands:
+
+- `< 2s`: hidden
+- `2s - 9.9s`: gray
+- `10s - 59.9s`: yellow
+- `>= 60s`: red, formatted like `1m05s`
+
+## Toolchain Segments
+
+The right prompt shows project-local versions only when marker files are present:
+
+- Node: `.node-version` or `.nvmrc`, using `fnm use --silent-if-unchanged` and `node -v`.
+- Python: `.python-version`.
+- Go: `go` directive in `go.mod`.
+- Rust: `rust-toolchain.toml` or `rust-toolchain`.
+- .NET: `sdk.version` in `global.json`.
+
+Toolchain status is refreshed asynchronously and cached briefly, so prompt rendering does not block on version probes.
+
+## Completion And Editing
+
+Interactive ConsoleHost sessions load PSReadLine with:
+
+- Emacs edit mode.
+- Inline history/plugin predictions.
+- `UpArrow` / `DownArrow` prefix history search.
+- `Tab` menu completion.
+- `Ctrl+RightArrow` accepting the next suggestion word.
+- Command duration tracking for the prompt.
+
+Completion behavior also includes slash-style path display on Windows, substring path fallback completion, Carapace integration when `carapace` is installed, and custom git path completion for commands such as `git add`, `git restore`, `git clean`, `git rm`, `git mv`, and `git commit`.
+
+## Aliases And Helpers
+
+Directory shortcuts:
+
+```powershell
+..      # cd ..
+...     # cd ../..
+....    # cd ../../..
+```
+
+Git aliases:
+
+```powershell
+g gst gss ga gaa gco gcb gb gc gcmsg gca gp gl gf gd gds glog gloga
+```
+
+Utility helpers:
+
+```powershell
+which whereis touch mkcd head tail export env open xdg-open df refreshenv reload icons
+```
+
+`icons` loads Terminal-Icons on demand. Normal directory listing uses `eza --icons`, so Terminal-Icons is not loaded during startup.
+
+## Requirements
+
+- PowerShell 7 (`pwsh`)
+- Git
+- eza
+- bat
+- ripgrep (`rg`)
+- fnm
+- carapace
+
+Optional:
+
+- Terminal-Icons, only when manually running the `icons` helper.
+
+`zoxide` and `fzf` are intentionally not required by this profile.
+
+## Install
+
+```powershell
+git clone git@github.com:yi-ning-le/pwsh-profile.git
+cd pwsh-profile
+.\scripts\install.ps1
+```
+
+The installer copies `profile/Microsoft.PowerShell_profile.ps1` to `$PROFILE.CurrentUserCurrentHost` and copies every `.ps1` file under `profile/profile.d` beside it, including `profile.d/prompt-updaters`. If the entry profile already exists, it creates a timestamped backup first.
+
+To skip the entry profile backup:
+
+```powershell
+.\scripts\install.ps1 -NoBackup
+```
+
+## Install Dependencies With winget
+
+```powershell
+.\packages\winget.ps1
+```
+
+The winget script installs Git, eza, bat, ripgrep, fnm, and Carapace. Review the package list before running it on a new machine.
+
+## Verify
+
+```powershell
+.\scripts\test-profile.ps1
+# or increase the startup benchmark sample count
+.\scripts\test-profile.ps1 -Runs 20
+```
+
+The test script checks parser errors, policy regressions, and a small startup benchmark. It recursively parses the entry profile and every `.ps1` file under `profile/profile.d`.
+
+## Runtime Cache
+
+The profile writes local runtime cache under `$env:LOCALAPPDATA\PowerShell\ProfileCache`. This cache is machine-local and should not be committed.
+
+Cached data includes async git status, async toolchain status, and generated Carapace completion script output. Prompt updater scripts live in `profile/profile.d/prompt-updaters`; startup uses those source-controlled scripts directly instead of generating updater script files into the cache.
+
+## Maintenance Policy
+
+- Keep startup and prompt paths fast.
+- Keep helper scripts readable; do not convert them to base64 blobs.
+- Do not add fallback implementations for `eza`, `bat`, or `rg` unless the owner explicitly changes this policy.
+- Do not reintroduce `zoxide` or `fzf` unless they become actively used again.
