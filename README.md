@@ -2,7 +2,7 @@
 
 A fast personal PowerShell profile for Windows / PowerShell 7.
 
-This repo keeps the profile portable without hiding missing dependencies. Modern CLI tools such as `eza`, `bat`, and `rg` are explicit requirements; if they are not installed, the related commands should fail visibly.
+This repo keeps the profile portable without hiding missing dependencies. Modern CLI tools such as `lsd`, `bat`, and `rg` are explicit requirements; if they are not installed, the related commands should fail visibly.
 
 ## What It Includes
 
@@ -18,7 +18,7 @@ This repo keeps the profile portable without hiding missing dependencies. Modern
 - Oh-my-zsh-style git aliases and directory navigation shortcuts.
 - Unix muscle-memory helpers such as `which`, `whereis`, `touch`, `mkcd`, `head`, `tail`, `export`, `env`, `open`, `df`, `refreshenv`, and `reload`.
 - Direct modern CLI wrappers:
-  - `ls`, `l`, `ll`, `la`, `lt` use `eza`.
+  - `ls`, `l`, `ll`, `la`, `lt` use `lsd`.
   - `cat` uses `bat`.
   - `grep` uses `rg`.
 - PowerShell's default `curl` / `wget` aliases are removed so real executables resolve from `PATH`.
@@ -32,7 +32,7 @@ profile/profile.d/20-node.ps1                fnm integration and lazy Node comma
 profile/profile.d/25-icons.ps1               on-demand Terminal-Icons helper
 profile/profile.d/30-psreadline.ps1          PSReadLine options, keybindings, duration tracking
 profile/profile.d/40-completion.ps1          path completion, carapace cache, git path completion
-profile/profile.d/50-aliases.ps1             eza/bat/rg wrappers, git aliases, navigation helpers
+profile/profile.d/50-aliases.ps1             lsd/bat/rg wrappers, git aliases, navigation helpers
 profile/profile.d/60-utils.ps1               small Unix-style utility functions
 profile/profile.d/prompt-updaters/*.ps1      async git/toolchain updater scripts
 scripts/install.ps1                          install/sync local profile files
@@ -125,13 +125,13 @@ Utility helpers:
 which whereis touch mkcd head tail export env open xdg-open df refreshenv reload icons
 ```
 
-`icons` loads Terminal-Icons on demand. Normal directory listing uses `eza --icons`, so Terminal-Icons is not loaded during startup.
+`icons` loads Terminal-Icons on demand. Normal directory listing uses `lsd --icon always`, so Terminal-Icons is not loaded during startup.
 
 ## Requirements
 
 - PowerShell 7 (`pwsh`)
 - Git
-- eza
+- lsd
 - bat
 - ripgrep (`rg`)
 - fnm
@@ -165,7 +165,7 @@ To skip the entry profile backup:
 .\packages\winget.ps1
 ```
 
-The winget script installs Git, eza, bat, ripgrep, fnm, and Carapace. Review the package list before running it on a new machine.
+The winget script installs Git, lsd, bat, ripgrep, fnm, and Carapace. Review the package list before running it on a new machine.
 
 ## Verify
 
@@ -187,5 +187,5 @@ Cached data includes async git status, async toolchain status, and generated Car
 
 - Keep startup and prompt paths fast.
 - Keep helper scripts readable; do not convert them to base64 blobs.
-- Do not add fallback implementations for `eza`, `bat`, or `rg` unless the owner explicitly changes this policy.
+- Do not add fallback implementations for `lsd`, `bat`, or `rg` unless the owner explicitly changes this policy.
 - Do not reintroduce `zoxide` or `fzf` unless they become actively used again.

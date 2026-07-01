@@ -42,7 +42,7 @@ $checks = [ordered]@{
     NoBase64Helper = $content -notmatch 'FromBase64String'
     NoZoxideInit = $content -notmatch 'zoxide\s+init\s+powershell'
     NoFzfInit = $content -notmatch 'PSFzf|Invoke-Fzf|Set-PsFzfOption'
-    DirectEza = $content -match '(?s)function\s+ls\s*\{.*?\beza\b'
+    DirectLsd = $content -match '(?s)function\s+ls\s*\{.*?\blsd\b'
     DirectBat = $content -match '(?s)function\s+cat\s*\{.*?\bbat\b'
     DirectRg = $content -match '(?s)function\s+grep\s*\{.*?\brg\b'
 }
@@ -82,4 +82,3 @@ function Measure-PwshStartup {
 
 Measure-PwshStartup -Name 'NoProfile' -Arguments @('-NoLogo', '-NoProfile', '-Command', '$null')
 Measure-PwshStartup -Name 'CurrentProfile' -Arguments @('-NoLogo', '-Command', '$null')
-

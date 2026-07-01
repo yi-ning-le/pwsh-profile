@@ -5,7 +5,7 @@ This repo contains a personal PowerShell profile. Treat the `profile/` tree as t
 ## Rules
 
 - Preserve the current p10k classic-inspired prompt appearance unless explicitly asked to change it.
-- Preserve the direct dependency policy: `ls`/`cat`/`grep` call `eza`/`bat`/`rg` directly and should not gain fallback behavior.
+- Preserve the direct dependency policy: `ls`/`cat`/`grep` call `lsd`/`bat`/`rg` directly and should not gain fallback behavior.
 - Do not reintroduce `zoxide`, `fzf`, or `PSFzf` unless explicitly requested.
 - Keep interactive-only features gated to interactive ConsoleHost sessions, including `-NoExit -Command` sessions.
 - Keep async prompt updater scripts in `profile/profile.d/prompt-updaters` readable and source-controlled; do not move them back into generated cache scripts or large here-strings in `10-prompt.ps1`.

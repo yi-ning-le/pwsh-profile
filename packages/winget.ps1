@@ -5,7 +5,7 @@ $ErrorActionPreference = 'Stop'
 
 $packages = @(
     @{ Id = 'Git.Git'; Name = 'Git' },
-    @{ Id = 'eza-community.eza'; Name = 'eza' },
+    @{ Id = 'lsd-rs.lsd'; Name = 'lsd' },
     @{ Id = 'sharkdp.bat'; Name = 'bat' },
     @{ Id = 'BurntSushi.ripgrep.MSVC'; Name = 'ripgrep' },
     @{ Id = 'Schniz.fnm'; Name = 'fnm' },

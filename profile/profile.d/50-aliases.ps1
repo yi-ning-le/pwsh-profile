@@ -2,14 +2,14 @@
 #  Aliases (common oh-my-zsh plugin style)
 # ============================================================
 
-# ---- Directory listing (handled by eza) ----
-# eza = modern ls replacement: icons / color / git status / tree view. If eza is missing, calls fail directly.
+# ---- Directory listing (handled by lsd) ----
+# lsd = modern ls replacement: icons / color / tree view. If lsd is missing, calls fail directly.
 foreach ($a in 'ls') { if (Test-Path "Alias:$a") { Remove-Item "Alias:$a" -Force } }
-function ls { if ($args.Count) { eza --icons --group-directories-first @args } else { eza --icons --group-directories-first . } }
-function l  { if ($args.Count) { eza --icons --group-directories-first @args } else { eza --icons --group-directories-first . } }
-function ll { if ($args.Count) { eza --icons --group-directories-first -l --git @args } else { eza --icons --group-directories-first -l --git . } }        # Long listing + git status
-function la { if ($args.Count) { eza --icons --group-directories-first -la --git @args } else { eza --icons --group-directories-first -la --git . } }      # Include hidden files
-function lt { if ($args.Count) { eza --icons --group-directories-first --tree --level=2 @args } else { eza --icons --group-directories-first --tree --level=2 . } } # Two-level tree
+function ls { if ($args.Count) { lsd --icon always --group-dirs first @args } else { lsd --icon always --group-dirs first . } }
+function l  { if ($args.Count) { lsd --icon always --group-dirs first @args } else { lsd --icon always --group-dirs first . } }
+function ll { if ($args.Count) { lsd --icon always --group-dirs first -l @args } else { lsd --icon always --group-dirs first -l . } }                    # Long listing
+function la { if ($args.Count) { lsd --icon always --group-dirs first -la @args } else { lsd --icon always --group-dirs first -la . } }                  # Include hidden files
+function lt { if ($args.Count) { lsd --icon always --group-dirs first --tree --depth 2 @args } else { lsd --icon always --group-dirs first --tree --depth 2 . } } # Two-level tree
 # ---- Directory navigation ----
 function .. { Set-Location .. }
 function ... { Set-Location ../.. }
