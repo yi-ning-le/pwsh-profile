@@ -19,6 +19,38 @@ Set-PSReadLineKeyHandler -Key UpArrow   -Function HistorySearchBackward
 Set-PSReadLineKeyHandler -Key DownArrow -Function HistorySearchForward
 # Tab: menu completion
 Set-PSReadLineKeyHandler -Key Tab       -Function MenuComplete
+Set-PSReadLineKeyHandler -Key '/' `
+    -BriefDescription SlashPathMenuComplete `
+    -Description 'Accept selected menu completion, insert slash, and continue path completion.' `
+    -ScriptBlock {
+        param($key, $arg)
+
+        $beforeLine = $null
+        $beforeCursor = $null
+        [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$beforeLine, [ref]$beforeCursor)
+
+        [Microsoft.PowerShell.PSConsoleReadLine]::SelfInsert($key, $arg)
+
+        $line = $null
+        $cursor = $null
+        [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$line, [ref]$cursor)
+
+        $plainSlashInsert = $false
+        if ($null -ne $beforeLine -and $beforeCursor -ge 0 -and $beforeCursor -le $beforeLine.Length) {
+            $plainSlashInsert = ($line -eq $beforeLine.Insert($beforeCursor, '/')) -and ($cursor -eq ($beforeCursor + 1))
+        }
+
+        if ($plainSlashInsert) { return }
+
+        if ($cursor -ge 2 -and $line.Substring($cursor - 2, 2) -eq '//' -and ($beforeCursor -eq 0 -or $beforeLine[$beforeCursor - 1] -ne '/')) {
+            [Microsoft.PowerShell.PSConsoleReadLine]::BackwardDeleteChar($key, $arg)
+            [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$line, [ref]$cursor)
+        }
+
+        if ($cursor -gt 0 -and $line[$cursor - 1] -eq '/') {
+            [Microsoft.PowerShell.PSConsoleReadLine]::MenuComplete($key, $arg)
+        }
+    }
 # RightArrow / End: accept the full inline suggestion at end of line; Ctrl+RightArrow accepts one word (zsh feel)
 Set-PSReadLineKeyHandler -Key RightArrow      -Function ForwardChar
 Set-PSReadLineKeyHandler -Key Ctrl+RightArrow -Function AcceptNextSuggestionWord

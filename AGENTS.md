@@ -27,4 +27,10 @@ Use a larger sample when reviewing startup cost:
 .\scripts\test-profile.ps1 -Runs 20
 ```
 
-The test script recursively parses the entry profile and every `.ps1` file under `profile/profile.d`, then runs policy checks and a startup benchmark.
+From a real, unredirected Windows Terminal, measure interactive startup with:
+
+```powershell
+.\scripts\test-profile.ps1 -InteractiveRuns 20
+```
+
+The test script recursively parses the entry profile and every `.ps1` file under `profile/profile.d`, then runs policy checks, isolated smoke tests, and a batch startup benchmark. The optional interactive benchmark is intentionally unavailable in redirected automation.

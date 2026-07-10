@@ -9,6 +9,7 @@ This repo keeps the profile portable without hiding missing dependencies. Modern
 - Two-line p10k classic-inspired prompt with gray Powerline segments.
 - Smart path shortening with project-root awareness.
 - Async git prompt cache with branch, dirty state, stash, conflict, and merge/rebase/cherry-pick/revert state.
+- Git branch and status probing is fully asynchronous; the first prompt in a directory may redraw once its cache is ready.
 - Git branch detection uses Git plumbing, so both files and reftable ref backends work.
 - Right-aligned toolchain versions and command duration when the terminal is wide enough.
 - PSReadLine history suggestions, prefix history search, and menu completion for interactive sessions.
@@ -56,6 +57,14 @@ Markdown-native sketch, using broadly supported Unicode/ASCII characters instead
 The real terminal prompt uses Nerd Font icons and Powerline separators. The screenshot above shows the intended rendering; the text sketch remains readable in Markdown viewers without Nerd Font support. The second-line symbol is green after success and red after failure.
 
 Narrow terminals hide the right side first, so path and git state remain visible.
+
+The default `classic` symbol set preserves the Nerd Font / Powerline appearance. For a plain-text current session, run:
+
+```powershell
+$script:LeanPromptSymbolSet = 'ascii'
+```
+
+ASCII mode also replaces the Node, Python, Go, Rust, and .NET icons with readable text. Run `Test-LeanPromptGlyphs` to inspect every symbol, Unicode codepoint, and terminal cell width; it does not inspect the active terminal font.
 
 Git status symbols:
 
@@ -151,9 +160,9 @@ cd pwsh-profile
 .\scripts\install.ps1
 ```
 
-The installer copies `profile/Microsoft.PowerShell_profile.ps1` to `$PROFILE.CurrentUserCurrentHost` and copies every `.ps1` file under `profile/profile.d` beside it, including `profile.d/prompt-updaters`. If the entry profile already exists, it creates a timestamped backup first.
+The installer validates and stages `profile/Microsoft.PowerShell_profile.ps1` plus every `.ps1` file under `profile/profile.d`, then replaces the installed entry and `profile.d` as a mirrored unit. Same-volume directory renames keep `profile.d` replacement atomic, so a locked target file fails the install without partially moving the existing tree. Stale target scripts are removed from the active install. Existing entry and `profile.d` trees receive separate timestamped backups; backups are retained until you remove them.
 
-To skip the entry profile backup:
+To skip permanent backups (rollback protection is still used during installation):
 
 ```powershell
 .\scripts\install.ps1 -NoBackup
@@ -165,7 +174,7 @@ To skip the entry profile backup:
 .\packages\winget.ps1
 ```
 
-The winget script installs Git, lsd, bat, ripgrep, fnm, and Carapace. Review the package list before running it on a new machine.
+The winget script installs Git, lsd, bat, ripgrep, fnm, and Carapace using exact package IDs. It stops at the first failed package and reports its ID and native exit code. Review the package list before running it on a new machine.
 
 ## Verify
 
@@ -173,15 +182,17 @@ The winget script installs Git, lsd, bat, ripgrep, fnm, and Carapace. Review the
 .\scripts\test-profile.ps1
 # or increase the startup benchmark sample count
 .\scripts\test-profile.ps1 -Runs 20
+# run from a real, unredirected Windows Terminal to measure interactive features
+.\scripts\test-profile.ps1 -InteractiveRuns 20
 ```
 
-The test script checks parser errors, policy regressions, and a small startup benchmark. It recursively parses the entry profile and every `.ps1` file under `profile/profile.d`.
+The test script checks parser errors, policy regressions, isolated runtime smoke cases, and a small startup benchmark. It recursively parses the entry profile and every `.ps1` file under `profile/profile.d`, then launches the repository source profile with `-NoProfile`; it does not benchmark a possibly stale installed copy. Git updater smoke cases cover the normal files backend and, when `git init -h` advertises `--ref-format`, a real reftable repository; Git versions without that option print an explicit reftable `SKIP`, while an advertised but failed reftable initialization fails validation. Startup results report both `MedianMs` and `AverageMs`, with the median used for comparisons. The default `BatchSourceProfile` metric excludes interactive-only features. `-InteractiveRuns` adds `InteractiveSourceProfile` and requires an unredirected ConsoleHost so PSReadLine, completion, Carapace, and prompt watchers actually load. Each interactive child has a 30-second safety timeout, and profile errors exit nonzero instead of leaving a `-NoExit` shell open. Any unexpected batch child-process output or nonzero exit fails the run.
 
 ## Runtime Cache
 
 The profile writes local runtime cache under `$env:LOCALAPPDATA\PowerShell\ProfileCache`. This cache is machine-local and should not be committed.
 
-Cached data includes async git status, async toolchain status, and generated Carapace completion script output. Prompt updater scripts live in `profile/profile.d/prompt-updaters`; startup uses those source-controlled scripts directly instead of generating updater script files into the cache.
+Cached data includes async git status, async toolchain status, and generated Carapace completion script output. Git and toolchain cache files are published atomically from same-directory temporary files. Prompt updater scripts live in `profile/profile.d/prompt-updaters`; startup uses those source-controlled scripts directly instead of generating updater script files into the cache.
 
 ## Maintenance Policy
 

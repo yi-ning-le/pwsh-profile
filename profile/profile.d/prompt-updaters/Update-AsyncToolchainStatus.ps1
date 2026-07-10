@@ -59,9 +59,17 @@ try {
         catch {}
     }
 
-    [pscustomobject]@{ Path = $Cwd; IsProject = ($parts.Count -gt 0); Text = ($parts -join ' '); Updated = (Get-Date).ToString('o') } |
-        ConvertTo-Json -Compress | Set-Content -LiteralPath $CachePath -Encoding UTF8
+    $tempPath = "$CachePath.$PID.tmp"
+    try {
+        [pscustomobject]@{ Path = $Cwd; IsProject = ($parts.Count -gt 0); Text = ($parts -join ' '); Updated = (Get-Date).ToString('o') } |
+            ConvertTo-Json -Compress | Set-Content -LiteralPath $tempPath -Encoding UTF8 -ErrorAction Stop
+        [System.IO.File]::Move($tempPath, $CachePath, $true)
+    }
+    finally {
+        Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
+    }
 }
+catch {}
 finally {
     Remove-Item -LiteralPath $LockPath -Force -ErrorAction SilentlyContinue
     $global:LASTEXITCODE = 0

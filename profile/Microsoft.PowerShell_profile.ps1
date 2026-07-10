@@ -1,4 +1,4 @@
-$profileRoot = Split-Path -Parent $PROFILE.CurrentUserCurrentHost
+$profileRoot = $PSScriptRoot
 $profileParts = @(
     'profile.d\10-prompt.ps1',
     'profile.d\20-node.ps1',

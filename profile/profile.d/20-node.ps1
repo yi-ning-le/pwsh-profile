@@ -2,9 +2,16 @@
 # Auto-switch Node versions when entering directories with .node-version / .nvmrc (--use-on-cd, like zsh nvm autoload).
 if (Get-Command fnm -CommandType Application -ErrorAction SilentlyContinue) {
     $__fnmEnv = fnm env --use-on-cd --shell powershell | Out-String
+    $__fnmExitCode = $global:LASTEXITCODE
+    if ($__fnmExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($__fnmEnv)) {
+        Remove-Variable __fnmEnv, __fnmExitCode -ErrorAction SilentlyContinue
+        Write-Warning 'fnm environment initialization failed; Node command wrappers were not installed.'
+        return
+    }
+
     $__fnmEnv = $__fnmEnv -replace '\s*-Or\s*\(Test-Path\s+package\.json\)', ''
     $__fnmEnv | Invoke-Expression
-    Remove-Variable __fnmEnv -ErrorAction SilentlyContinue
+    Remove-Variable __fnmEnv, __fnmExitCode -ErrorAction SilentlyContinue
 
     # Lazy-load fallback: on first node/npm/pnpm/yarn call, switch default to a concrete version.
     # This avoids running fnm list/fnm use on every shell start while still bypassing Windows junction double-hop resolution issues.

@@ -6,32 +6,11 @@ if (-not (Test-Path function:\__PwshZshDefaultTabExpansion2)) {
     Copy-Item function:\TabExpansion2 function:\__PwshZshDefaultTabExpansion2
 }
 
-function Convert-ToSlashPathDisplay {
-    param([string] $Text)
-    if ([string]::IsNullOrEmpty($Text)) { return $Text }
-
-    $display = $Text -replace '\\', '/'
-    $homePath = [Environment]::GetFolderPath('UserProfile') -replace '\\', '/'
-    if ($homePath) {
-        if ($display.StartsWith($homePath, [System.StringComparison]::OrdinalIgnoreCase)) {
-            $display = '~' + $display.Substring($homePath.Length)
-        }
-        elseif ($display.StartsWith("'$homePath", [System.StringComparison]::OrdinalIgnoreCase)) {
-            $display = "'~" + $display.Substring($homePath.Length + 1)
-        }
-        elseif ($display.StartsWith('"' + $homePath, [System.StringComparison]::OrdinalIgnoreCase)) {
-            $display = '"~' + $display.Substring($homePath.Length + 1)
-        }
-    }
-
-    $display
-}
-
 function Add-SlashPathContainerSuffix {
     param([string] $Text)
     if ([string]::IsNullOrEmpty($Text)) { return $Text }
 
-    if ($Text.EndsWith('/') -or $Text.EndsWith('\')) { return (Convert-ToSlashPathDisplay $Text) }
+    if ($Text.EndsWith('/') -or $Text.EndsWith('\')) { return (ConvertTo-LeanPromptSlashPath $Text) }
     if (($Text.StartsWith("'") -and $Text.EndsWith("'")) -or ($Text.StartsWith('"') -and $Text.EndsWith('"'))) {
         return $Text.Substring(0, $Text.Length - 1) + '/' + $Text.Substring($Text.Length - 1)
     }
@@ -75,13 +54,13 @@ function Convert-CompletionDisplayToSlashPath {
         $useSlashCompletionText = Test-SlashPathCompletionResult $match
         $isContainer = $match.ResultType -eq [System.Management.Automation.CompletionResultType]::ProviderContainer
 
-        $completionText = if ($useSlashCompletionText) { Convert-ToSlashPathDisplay $match.CompletionText } else { $match.CompletionText }
+        $completionText = if ($useSlashCompletionText) { ConvertTo-LeanPromptSlashPath $match.CompletionText } else { $match.CompletionText }
         if ($useSlashCompletionText -and $isContainer) {
             $completionText = Add-SlashPathContainerSuffix $completionText
         }
 
-        $listItemText = if ($useSlashCompletionText) { Convert-ToSlashPathDisplay $match.ListItemText } else { $match.ListItemText }
-        $toolTip = if ($useSlashCompletionText) { Convert-ToSlashPathDisplay $match.ToolTip } else { $match.ToolTip }
+        $listItemText = if ($useSlashCompletionText) { ConvertTo-LeanPromptSlashPath $match.ListItemText } else { $match.ListItemText }
+        $toolTip = if ($useSlashCompletionText) { ConvertTo-LeanPromptSlashPath $match.ToolTip } else { $match.ToolTip }
         $resultType = if ($useSlashCompletionText -and $isContainer) {
             [System.Management.Automation.CompletionResultType]::ParameterValue
         }
@@ -152,9 +131,9 @@ function TabExpansion2 {
                 $candidate
             }
 
-            $completionInsertText = Convert-ToSlashPathDisplay $completionText
+            $completionInsertText = ConvertTo-LeanPromptSlashPath $completionText
             if ($_.PSIsContainer) { $completionInsertText = Add-SlashPathContainerSuffix $completionInsertText }
-            $toolTip = Convert-ToSlashPathDisplay $_.FullName
+            $toolTip = ConvertTo-LeanPromptSlashPath $_.FullName
             $completionResultType = if ($_.PSIsContainer) {
                 [System.Management.Automation.CompletionResultType]::ParameterValue
             }

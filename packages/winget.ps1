@@ -2,6 +2,8 @@
 param()
 
 $ErrorActionPreference = 'Stop'
+$oldNativeErrorPreference = $PSNativeCommandUseErrorActionPreference
+$PSNativeCommandUseErrorActionPreference = $false
 
 $packages = @(
     @{ Id = 'Git.Git'; Name = 'Git' },
@@ -12,7 +14,16 @@ $packages = @(
     @{ Id = 'rsteube.Carapace'; Name = 'Carapace' }
 )
 
-foreach ($package in $packages) {
-    Write-Host "Installing $($package.Name) [$($package.Id)]"
-    winget install --id $package.Id --source winget --accept-package-agreements --accept-source-agreements --disable-interactivity
+try {
+    foreach ($package in $packages) {
+        Write-Host "Installing $($package.Name) [$($package.Id)]"
+        winget install --id $package.Id --exact --source winget --accept-package-agreements --accept-source-agreements --disable-interactivity
+        $exitCode = $global:LASTEXITCODE
+        if ($exitCode -ne 0) {
+            throw "winget install failed for $($package.Name) [$($package.Id)] (exit $exitCode)"
+        }
+    }
+}
+finally {
+    $PSNativeCommandUseErrorActionPreference = $oldNativeErrorPreference
 }
