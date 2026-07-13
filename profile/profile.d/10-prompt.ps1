@@ -431,6 +431,8 @@ $script:__AsyncGitStatusMemoryPath = $null
 $script:__AsyncGitStatusMemoryCachePath = $null
 $script:__AsyncGitStatusMemoryLastWriteTimeUtc = [datetime]::MinValue
 $script:__AsyncGitStatusMemoryText = ''
+$script:__LeanPromptGitBranchRefreshPending = $false
+$script:__LeanPromptGitBranchOverride = $null
 $script:__LeanPromptAsyncGitRedrawCachePath = ''
 $script:__LeanPromptAsyncGitRedrawLastUtc = [datetime]::MinValue
 $script:__LeanPromptAsyncGitRedrawSourceId = 'LeanPrompt.AsyncGitStatus.Redraw'
@@ -508,6 +510,24 @@ function global:Start-AsyncGitStatusRefresh {
     Start-AsyncStatusRefresh -Path $Path -CachePath $CachePath -LockPath $LockPath -UpdaterPath $script:__AsyncGitStatusUpdater -LockSeconds $script:__AsyncGitStatusLockSeconds
 }
 
+function global:Get-LeanPromptGitBranch {
+    param([Parameter(Mandatory)][string] $Path)
+
+    $lastExitCode = $global:LASTEXITCODE
+    $PSNativeCommandUseErrorActionPreference = $false
+    try {
+        $branch = (& git -C $Path symbolic-ref --quiet --short HEAD 2>$null | Select-Object -First 1)
+        if ($global:LASTEXITCODE -ne 0 -or -not $branch) {
+            $branch = (& git -C $Path rev-parse --short HEAD 2>$null | Select-Object -First 1)
+        }
+        if ($global:LASTEXITCODE -ne 0 -or -not $branch) { return '' }
+        ([string]$branch).Trim()
+    }
+    finally {
+        $global:LASTEXITCODE = $lastExitCode
+    }
+}
+
 function global:Start-AsyncToolchainStatusRefresh {
     param([Parameter(Mandatory)][string] $Path, [Parameter(Mandatory)][string] $CachePath, [Parameter(Mandatory)][string] $LockPath)
     Start-AsyncStatusRefresh -Path $Path -CachePath $CachePath -LockPath $LockPath -UpdaterPath $script:__AsyncToolchainStatusUpdater -LockSeconds $script:__AsyncToolchainStatusLockSeconds
@@ -561,10 +581,11 @@ function global:Get-AsyncCachedStatusText {
             $text = Get-Variable -Name $textVar -Scope Script -ValueOnly
         }
         elseif ($cached) {
-            if ($cached.Path -eq $cwd) { $text = & $Formatter $cached }
+            $cacheLastWriteTimeUtc = if ($item) { $item.LastWriteTimeUtc } else { [datetime]::MinValue }
+            if ($cached.Path -eq $cwd) { $text = & $Formatter $cached $cacheLastWriteTimeUtc }
             Set-Variable -Name $pathVar -Scope Script -Value $cwd
             Set-Variable -Name $cacheVar -Scope Script -Value $cachePath
-            Set-Variable -Name $timeVar -Scope Script -Value $(if ($item) { $item.LastWriteTimeUtc } else { [datetime]::MinValue })
+            Set-Variable -Name $timeVar -Scope Script -Value $cacheLastWriteTimeUtc
             Set-Variable -Name $textVar -Scope Script -Value $text
         }
         else {
@@ -675,12 +696,57 @@ function global:Get-AsyncGitStatusText {
 
     $cwd = $location.ProviderPath
     $key = Get-AsyncStatusKey -Path $cwd
-    $script:__LeanPromptAsyncGitRedrawCachePath = Join-Path $script:__AsyncGitStatusCacheDir "$key.json"
+    $cachePath = Join-Path $script:__AsyncGitStatusCacheDir "$key.json"
+    $lockPath = Join-Path $script:__AsyncGitStatusCacheDir "$key.lock"
+    $script:__LeanPromptAsyncGitRedrawCachePath = $cachePath
+    $forceRefresh = $false
 
-    Get-AsyncCachedStatusText -Kind 'Git' -CacheDir $script:__AsyncGitStatusCacheDir -TtlSeconds $script:__AsyncGitStatusTtlSeconds `
+    if ($script:__LeanPromptGitBranchRefreshPending) {
+        $script:__LeanPromptGitBranchRefreshPending = $false
+        $forceRefresh = $true
+        $cacheItem = Get-Item -LiteralPath $cachePath -ErrorAction SilentlyContinue
+        $script:__LeanPromptGitBranchOverride = [pscustomobject]@{
+            Path = $cwd
+            Branch = Get-LeanPromptGitBranch -Path $cwd
+            CacheLastWriteTimeUtc = if ($cacheItem) { $cacheItem.LastWriteTimeUtc } else { [datetime]::MinValue }
+        }
+        $script:__AsyncGitStatusMemoryLastWriteTimeUtc = [datetime]::MinValue
+    }
+
+    $text = Get-AsyncCachedStatusText -Kind 'Git' -CacheDir $script:__AsyncGitStatusCacheDir -TtlSeconds $script:__AsyncGitStatusTtlSeconds `
         -NegativeTtlSeconds $script:__AsyncGitStatusNegativeTtlSeconds -NegativeProperty 'IsRepo' `
-        -Formatter { param($status) Format-LeanPromptGitStatusText -Status $status -Branch $status.Branch } `
+        -Formatter {
+            param($status, [datetime]$cacheLastWriteTimeUtc)
+
+            $branch = [string]$status.Branch
+            $displayStatus = $status
+            $override = $script:__LeanPromptGitBranchOverride
+            if ($override -and $override.Path.Equals([string]$status.Path, [System.StringComparison]::OrdinalIgnoreCase)) {
+                $branch = [string]$override.Branch
+                if ([string]$status.Branch -cne $branch -and $override.CacheLastWriteTimeUtc -ne $cacheLastWriteTimeUtc) {
+                    $branch = Get-LeanPromptGitBranch -Path $status.Path
+                    $override.Branch = $branch
+                    $override.CacheLastWriteTimeUtc = $cacheLastWriteTimeUtc
+                }
+                if ([string]$status.Branch -ceq $branch) {
+                    $script:__LeanPromptGitBranchOverride = $null
+                }
+                else {
+                    $displayStatus = $null
+                }
+            }
+
+            Format-LeanPromptGitStatusText -Status $displayStatus -Branch $branch
+        } `
         -Refresh { param($path, $cachePath, $lockPath) Start-AsyncGitStatusRefresh -Path $path -CachePath $cachePath -LockPath $lockPath }
+
+    $override = $script:__LeanPromptGitBranchOverride
+    $overrideApplies = $override -and $override.Path.Equals($cwd, [System.StringComparison]::OrdinalIgnoreCase)
+    if ([string]::IsNullOrEmpty($text) -and $overrideApplies) {
+        $text = Format-LeanPromptGitStatusText -Status $null -Branch $override.Branch
+    }
+    if ($forceRefresh -or $overrideApplies) { Start-AsyncGitStatusRefresh -Path $cwd -CachePath $cachePath -LockPath $lockPath }
+    $text
 }
 function global:Format-ToolchainStatusText {
     param([string] $Text)

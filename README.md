@@ -8,12 +8,12 @@ This repo keeps the profile portable without hiding missing dependencies. Modern
 
 - Two-line p10k classic-inspired prompt with gray Powerline segments.
 - Smart path shortening with project-root awareness.
-- Async git prompt cache with branch, dirty state, stash, conflict, and merge/rebase/cherry-pick/revert state.
-- Git branch and status probing is fully asynchronous; the first prompt in a directory may redraw once its cache is ready.
+- Git prompt with a synchronous branch refresh after interactive Git commands plus async dirty state, stash, conflict, and merge/rebase/cherry-pick/revert state.
+- Git status probing remains asynchronous; the first prompt in a directory may redraw once its cache is ready.
 - Git branch detection uses Git plumbing, so both files and reftable ref backends work.
 - Right-aligned toolchain versions and command duration when the terminal is wide enough.
-- PSReadLine history suggestions, prefix history search, and menu completion for interactive sessions.
-- Slash-style path display in completion results, plus substring fallback path completion.
+- PSReadLine history suggestions, prefix history search, and zsh-style two-stage Tab completion (prefix first, menu on repeat) for interactive sessions.
+- Zsh-style path completion: `/` only inserts a separator, Tab performs strict case-sensitive segment-prefix completion, directories end in `/`, and hidden entries require an explicit `.` prefix.
 - Carapace external command completion and status-aware git path completion.
 - `fnm` Node.js auto-switching plus lazy default initialization for `node`, `npm`, `npx`, `pnpm`, `yarn`, and `corepack`.
 - Oh-my-zsh-style git aliases and directory navigation shortcuts.
@@ -106,11 +106,21 @@ Interactive ConsoleHost sessions load PSReadLine with:
 - Emacs edit mode.
 - Inline history/plugin predictions.
 - `UpArrow` / `DownArrow` prefix history search.
-- `Tab` menu completion.
+- `Tab` two-stage completion (zsh `auto_menu` style): the first press completes the longest common prefix so typing can keep narrowing candidates; a second press on an unchanged line opens menu completion.
+- `Shift+Tab` opening menu completion directly (and moving backward inside an open menu).
 - `Ctrl+RightArrow` accepting the next suggestion word.
 - Command duration tracking for the prompt.
 
-Completion behavior also includes slash-style path display on Windows, substring path fallback completion, Carapace integration when `carapace` is installed, and custom git path completion for commands such as `git add`, `git restore`, `git clean`, `git rm`, `git mv`, and `git commit`.
+Path completion follows the default Zsh `compinit` model:
+
+- `/` is ordinary input and never starts completion; only Tab does. The first Tab completes a common prefix, while a repeated Tab opens the menu.
+- Matching is a strict, case-sensitive prefix for each path segment. Substring matching and `-`/`_` interchange are intentionally not applied.
+- Directories remain `ProviderContainer` candidates and end in `/`; file candidates advance with a trailing space. Quoted paths keep the suffix in the correct position.
+- Hidden entries appear only when the current segment starts with `.`, while unique intermediate segments continue to the next level and ambiguous segments stop at that level.
+- `~`, `.`, `..`, drive roots, UNC paths, PowerShell providers, and the separator style typed by the user are accepted; completed paths are displayed with `/`.
+- A `/` inserted by directory completion has Zsh `AUTO_REMOVE_SLASH` behavior before another separator, Space, Enter, and command separators. Manually typed `/` is never treated as automatic.
+
+Carapace integration and custom git path completion remain available for commands such as `git add`, `git restore`, `git clean`, `git rm`, `git mv`, and `git commit`. Real-path results receive the same path rules; non-path results remain unchanged.
 
 ## Aliases And Helpers
 
