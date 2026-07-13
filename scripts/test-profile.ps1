@@ -493,13 +493,14 @@ Assert-Equal $converted.CompletionMatches[1].ResultType ([System.Management.Auto
 Assert-Equal $converted.CompletionMatches[2].CompletionText "'Space Dir/'" 'quoted directory completion text'
 Assert-Equal $converted.CompletionMatches[2].ListItemText 'Space Dir/' 'quoted directory list item'
 
-if (-not (Test-PwshZshPathPrefix 'Al' 'Alpha')) { throw 'strict prefix rejected matching case' }
-if (Test-PwshZshPathPrefix 'al' 'Alpha') { throw 'strict prefix accepted the wrong case' }
-if (Test-PwshZshPathPrefix 'pha' 'Alpha') { throw 'strict prefix accepted a substring' }
-if (Test-PwshZshPathPrefix 'my_' 'my-file') { throw 'strict prefix interchanged underscore and hyphen' }
+if (-not (Test-PwshZshPathPrefix 'Al' 'Alpha')) { throw 'prefix rejected matching case' }
+if (-not (Test-PwshZshPathPrefix 'al' 'Alpha')) { throw 'prefix rejected lowercase input' }
+if (-not (Test-PwshZshPathPrefix 'AL' 'Alpha')) { throw 'prefix rejected uppercase input' }
+if (Test-PwshZshPathPrefix 'pha' 'Alpha') { throw 'prefix accepted a substring' }
+if (Test-PwshZshPathPrefix 'my_' 'my-file') { throw 'prefix interchanged underscore and hyphen' }
 if (Test-PwshZshPathPrefix './' './.hidden') { throw 'bare dot path exposed a hidden item' }
 if (-not (Test-PwshZshPathPrefix './.h' './.hidden')) { throw 'explicit dot prefix rejected a hidden item' }
-if (-not (Test-PwshZshPathPrefix '\\server\Sh' '\\server\Share')) { throw 'UNC segment prefix was rejected' }
+if (-not (Test-PwshZshPathPrefix '\\SERVER\sh' '\\server\Share')) { throw 'case-insensitive UNC prefix was rejected' }
 
 $anchorMatches = [System.Collections.ObjectModel.Collection[System.Management.Automation.CompletionResult]]::new()
 foreach ($anchor in '~\Config\', 'R:\Repo\', '\\server\share\Dir\') {
@@ -604,11 +605,12 @@ $null = Assert-Completion 'cd Proj/mod/ex' 'Projects/modules/example/' 'Projects
 $null = Assert-Completion 'cd Proj/mo/' 'Projects/modules/example/' 'Projects/modules/example/' ProviderContainer
 $null = Assert-Completion 'cd sub_/in' 'sub_dir/inner/' 'sub_dir/inner/' ProviderContainer
 Assert-CompletionSet 'cd Bra/le' @('BranchOne/', 'BranchTwo/')
-Assert-NoCompletion 'cd pro/mo/ex'
+$null = Assert-Completion 'cd pro/mo/ex' 'Projects/modules/example/' 'Projects/modules/example/' ProviderContainer
 Assert-NoCompletion 'cd sub-d/in'
-$null = Assert-Completion 'cd A' 'AlphaUpper/' 'AlphaUpper/' ProviderContainer
-$null = Assert-Completion 'cd a' 'alphaLower/' 'alphaLower/' ProviderContainer
-$null = Assert-Completion 'cd .h' '.hiddenDir/' '.hiddenDir/' ProviderContainer
+$null = Assert-Completion 'cd alphau' 'AlphaUpper/' 'AlphaUpper/' ProviderContainer
+$null = Assert-Completion 'cd ALPHAL' 'alphaLower/' 'alphaLower/' ProviderContainer
+Assert-CompletionSet 'cd alpha' @('AlphaUpper/', 'alphaLower/')
+$null = Assert-Completion 'cd .H' '.hiddenDir/' '.hiddenDir/' ProviderContainer
 $null = Assert-Completion 'cd "Space D' '"Space Dir/"' 'Space Dir/' ProviderContainer
 Assert-Excludes 'cd ./' './.hiddenDir/'
 Assert-Includes 'cd ./.h' './.hiddenDir/'
@@ -697,11 +699,11 @@ function Assert-Completion([string]$Line, [string]$Text, [string]$ListItem, [Sys
     $match
 }
 
-$directoryCompletion = Assert-Completion 'git add Act' 'ActualCase/' 'ActualCase/' ProviderContainer
+$directoryCompletion = Assert-Completion 'git add actual' 'ActualCase/' 'ActualCase/' ProviderContainer
 $null = Assert-Completion 'git add ActualCase' 'ActualCase/' 'ActualCase/' ProviderContainer
-$null = Assert-Completion 'git add ActualCase/Nest' 'ActualCase/Nested/' 'ActualCase/Nested/' ProviderContainer
-$null = Assert-Completion 'git add ActualCase/Nested/Fi' 'ActualCase/Nested/File.txt ' 'ActualCase/Nested/File.txt' ProviderItem
-$null = Assert-Completion 'git add Spa' "'Space Dir/'" 'Space Dir/' ProviderContainer
+$null = Assert-Completion 'git add actualcase/nest' 'ActualCase/Nested/' 'ActualCase/Nested/' ProviderContainer
+$null = Assert-Completion 'git add ACTUALCASE/NESTED/fi' 'ActualCase/Nested/File.txt ' 'ActualCase/Nested/File.txt' ProviderItem
+$null = Assert-Completion 'git add spa' "'Space Dir/'" 'Space Dir/' ProviderContainer
 
 $flexCompletion = TabExpansion2 -inputScript 'git cherry_pi' -cursorColumn 13 -options @{}
 if ($flexCompletion.CompletionMatches.Count -ne 0) {

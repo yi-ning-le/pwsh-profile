@@ -59,7 +59,7 @@ function Test-PwshZshPathPrefix {
         $typedPart = $typedParts[$i]
         $candidatePart = $candidateParts[$i]
         if ($candidatePart.StartsWith('.') -and -not $typedPart.StartsWith('.')) { return $false }
-        if (-not $candidatePart.StartsWith($typedPart, [System.StringComparison]::Ordinal)) { return $false }
+        if (-not $candidatePart.StartsWith($typedPart, [System.StringComparison]::OrdinalIgnoreCase)) { return $false }
     }
     $true
 }
@@ -398,9 +398,9 @@ function Get-PwshZshPathCompletion {
         $matched = @(Get-ChildItem -LiteralPath $baseDir -Directory -Force -ErrorAction SilentlyContinue |
             Where-Object {
                 (-not $_.Name.StartsWith('.') -or $segment.StartsWith('.')) -and
-                $_.Name.StartsWith($segment, [System.StringComparison]::Ordinal)
+                $_.Name.StartsWith($segment, [System.StringComparison]::OrdinalIgnoreCase)
             } | Sort-Object Name)
-        $exact = @($matched | Where-Object { $_.Name.Equals($segment, [System.StringComparison]::Ordinal) })
+        $exact = @($matched | Where-Object { $_.Name.Equals($segment, [System.StringComparison]::OrdinalIgnoreCase) })
         if ($exact.Count -eq 1) { $matched = $exact }
         if ($matched.Count -ne 1) {
             if ($matched.Count -eq 0) { return $null }
@@ -423,7 +423,7 @@ function Get-PwshZshPathCompletion {
         Where-Object {
             (-not $DirectoriesOnly -or $_.PSIsContainer) -and
             (-not $_.Name.StartsWith('.') -or $leaf.StartsWith('.')) -and
-            $_.Name.StartsWith($leaf, [System.StringComparison]::Ordinal)
+            $_.Name.StartsWith($leaf, [System.StringComparison]::OrdinalIgnoreCase)
         } | Sort-Object -Property @{ Expression = 'PSIsContainer'; Descending = $true }, Name
     foreach ($item in $children) {
         $candidate = $typedPrefix + $item.Name
@@ -650,11 +650,11 @@ if (Get-Command carapace -CommandType Application -ErrorAction SilentlyContinue)
                         [System.IO.Path]::GetRelativePath($cwd, (Join-Path $rootBS ($_ -replace '/', '\')))
                     }
                     $word = ($wordToComplete -replace '/', '\').Trim("'`"")
-                    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+                    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
                     foreach ($f0 in $dirty) {
                         if (Test-PwshCompletionInterrupted) { return }
                         $f = $f0 -replace '/', '\'
-                        if (-not $f.StartsWith($word, [System.StringComparison]::Ordinal)) { continue }
+                        if (-not $f.StartsWith($word, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
                         $rest = $f.Substring($word.Length)
                         $i = $rest.IndexOf('\')
                         if ($i -ge 0) {

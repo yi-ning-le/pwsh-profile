@@ -13,7 +13,7 @@ This repo keeps the profile portable without hiding missing dependencies. Modern
 - Git branch detection uses Git plumbing, so both files and reftable ref backends work.
 - Right-aligned toolchain versions and command duration when the terminal is wide enough.
 - PSReadLine history suggestions, prefix history search, and zsh-style two-stage Tab completion (prefix first, menu on repeat) for interactive sessions.
-- Zsh-style path completion: `/` only inserts a separator, Tab performs strict case-sensitive segment-prefix completion, directories end in `/`, and hidden entries require an explicit `.` prefix.
+- Zsh-style path completion: `/` only inserts a separator, Tab performs case-insensitive segment-prefix completion, directories end in `/`, and hidden entries require an explicit `.` prefix.
 - Carapace external command completion and status-aware git path completion.
 - `fnm` Node.js auto-switching plus lazy default initialization for `node`, `npm`, `npx`, `pnpm`, `yarn`, and `corepack`.
 - Oh-my-zsh-style git aliases and directory navigation shortcuts.
@@ -111,10 +111,10 @@ Interactive ConsoleHost sessions load PSReadLine with:
 - `Ctrl+RightArrow` accepting the next suggestion word.
 - Command duration tracking for the prompt.
 
-Path completion follows the default Zsh `compinit` model:
+Path completion follows the Zsh `compinit` interaction model with Windows-friendly matcher behavior:
 
 - `/` is ordinary input and never starts completion; only Tab does. The first Tab completes a common prefix, while a repeated Tab opens the menu.
-- Matching is a strict, case-sensitive prefix for each path segment. Substring matching and `-`/`_` interchange are intentionally not applied.
+- Matching follows a Windows-friendly Zsh `matcher-list` style: each path segment uses a case-insensitive prefix. Substring matching and `-`/`_` interchange are intentionally not applied.
 - Directories remain `ProviderContainer` candidates and end in `/`; file candidates advance with a trailing space. Quoted paths keep the suffix in the correct position.
 - Hidden entries appear only when the current segment starts with `.`, while unique intermediate segments continue to the next level and ambiguous segments stop at that level.
 - `~`, `.`, `..`, drive roots, UNC paths, PowerShell providers, and the separator style typed by the user are accepted; completed paths are displayed with `/`.
