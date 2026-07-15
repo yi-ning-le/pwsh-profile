@@ -7,7 +7,7 @@
 # ---- Pure PowerShell prompt (Starship lean / powerlevel10k inspired) ----
 $script:__LeanPromptAnsiRegex = [regex]::new(([regex]::Escape([string][char]27)) + '\[[0-9;]*m')
 $script:__LeanPromptProjectRootCache = @{}
-$script:__LeanPromptProjectRootCacheTtlSeconds = 5
+$script:__LeanPromptProjectRootCacheTtlSeconds = 60
 $script:__LeanPromptCommandStartUtc = $null
 $script:__LeanPromptDurationEnabled = $false
 $script:__LeanPromptRightMinWidth = 50
@@ -231,11 +231,21 @@ function global:ConvertTo-LeanPromptSlashPath {
 function global:Test-LeanPromptProjectMarker {
     param([Parameter(Mandatory)][string] $Path)
 
-    foreach ($marker in '.git', 'package.json', 'go.mod', 'Cargo.toml', 'pyproject.toml', '.python-version', '.node-version', '.nvmrc') {
-        if (Test-Path -LiteralPath (Join-Path $Path $marker)) { return $true }
-    }
+    try {
+        $gitPath = [System.IO.Path]::Combine($Path, '.git')
+        if ([System.IO.File]::Exists($gitPath) -or [System.IO.Directory]::Exists($gitPath)) { return $true }
+        foreach ($marker in 'package.json', 'go.mod', 'Cargo.toml', 'pyproject.toml', '.python-version', '.node-version', '.nvmrc') {
+            if ([System.IO.File]::Exists([System.IO.Path]::Combine($Path, $marker))) { return $true }
+        }
 
-    [bool](Get-ChildItem -LiteralPath $Path -Filter '*.sln' -File -ErrorAction SilentlyContinue | Select-Object -First 1)
+        $enumerator = [System.IO.Directory]::EnumerateFiles($Path, '*.sln').GetEnumerator()
+        try { return $enumerator.MoveNext() }
+        finally { $enumerator.Dispose() }
+    }
+    catch [System.UnauthorizedAccessException] { $false }
+    catch [System.Security.SecurityException] { $false }
+    catch [System.IO.DirectoryNotFoundException] { $false }
+    catch [System.IO.IOException] { $false }
 }
 
 function global:Get-LeanPromptProjectRoot {
@@ -251,25 +261,37 @@ function global:Get-LeanPromptProjectRoot {
         $script:__LeanPromptProjectRootCache.Remove($Path)
     }
 
-    $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
-    if (-not $item) { return $null }
+    try {
+        $dir = if ([System.IO.Directory]::Exists($Path)) {
+            [System.IO.DirectoryInfo]::new($Path)
+        }
+        elseif ([System.IO.File]::Exists($Path)) {
+            [System.IO.FileInfo]::new($Path).Directory
+        }
+        else { return $null }
+    }
+    catch { return $null }
 
-    $dir = if ($item.PSIsContainer) { $item } else { $item.Directory }
+    $visited = [System.Collections.Generic.List[string]]::new()
+    $expiresUtc = $now.AddSeconds($script:__LeanPromptProjectRootCacheTtlSeconds)
     for ($depth = 0; $dir -and $depth -lt 8; $depth++) {
+        $visited.Add($dir.FullName)
         if (Test-LeanPromptProjectMarker -Path $dir.FullName) {
-            $script:__LeanPromptProjectRootCache[$Path] = [pscustomobject]@{
-                Root = $dir.FullName
-                ExpiresUtc = $now.AddSeconds($script:__LeanPromptProjectRootCacheTtlSeconds)
+            $entry = [pscustomobject]@{ Root = $dir.FullName; ExpiresUtc = $expiresUtc }
+            foreach ($visitedPath in $visited) {
+                $script:__LeanPromptProjectRootCache[$visitedPath] = $entry
             }
+            $script:__LeanPromptProjectRootCache[$Path] = $entry
             return $dir.FullName
         }
         $dir = $dir.Parent
     }
 
-    $script:__LeanPromptProjectRootCache[$Path] = [pscustomobject]@{
-        Root = ''
-        ExpiresUtc = $now.AddSeconds($script:__LeanPromptProjectRootCacheTtlSeconds)
+    $entry = [pscustomobject]@{ Root = ''; ExpiresUtc = $expiresUtc }
+    foreach ($visitedPath in $visited) {
+        $script:__LeanPromptProjectRootCache[$visitedPath] = $entry
     }
+    $script:__LeanPromptProjectRootCache[$Path] = $entry
     $null
 }
 
@@ -387,14 +409,6 @@ function global:Get-LeanPromptCommandDurationText {
     Format-LeanPromptCommandDurationText -Duration $duration
 }
 
-$script:__PwshProfileCommandLine = [Environment]::GetCommandLineArgs()
-$script:__PwshProfileIsBatch = [bool]($script:__PwshProfileCommandLine -match '(?i)^-(Command|c|File|f|EncodedCommand|ec)$')
-$script:__PwshProfileHasNoExit = [bool]($script:__PwshProfileCommandLine -match '(?i)^-(NoExit|noe)$')
-$script:__PwshProfileIsInteractive = $Host.Name -eq 'ConsoleHost' -and
-    -not [Console]::IsInputRedirected -and
-    -not [Console]::IsOutputRedirected -and
-    (-not $script:__PwshProfileIsBatch -or $script:__PwshProfileHasNoExit)
-
 function global:Start-ProfileBackgroundPowerShell {
     param(
         [Parameter(Mandatory)][string] $ScriptPath,
@@ -430,6 +444,7 @@ $script:__AsyncGitStatusLockSeconds = 30
 $script:__AsyncGitStatusMemoryPath = $null
 $script:__AsyncGitStatusMemoryCachePath = $null
 $script:__AsyncGitStatusMemoryLastWriteTimeUtc = [datetime]::MinValue
+$script:__AsyncGitStatusMemoryExpiresUtc = [datetime]::MinValue
 $script:__AsyncGitStatusMemoryText = ''
 $script:__LeanPromptGitBranchRefreshPending = $false
 $script:__LeanPromptGitBranchOverride = $null
@@ -444,6 +459,7 @@ $script:__AsyncToolchainStatusLockSeconds = 30
 $script:__AsyncToolchainStatusMemoryPath = $null
 $script:__AsyncToolchainStatusMemoryCachePath = $null
 $script:__AsyncToolchainStatusMemoryLastWriteTimeUtc = [datetime]::MinValue
+$script:__AsyncToolchainStatusMemoryExpiresUtc = [datetime]::MinValue
 $script:__AsyncToolchainStatusMemoryText = ''
 
 function global:Get-AsyncStatusKey {
@@ -554,53 +570,49 @@ function global:Get-AsyncCachedStatusText {
     $pathVar = "__Async${Kind}StatusMemoryPath"
     $cacheVar = "__Async${Kind}StatusMemoryCachePath"
     $timeVar = "__Async${Kind}StatusMemoryLastWriteTimeUtc"
+    $expiresVar = "__Async${Kind}StatusMemoryExpiresUtc"
     $textVar = "__Async${Kind}StatusMemoryText"
 
     $text = ''
     $stale = $true
-    $now = Get-Date
-    $item = $null
-    $cached = $null
-
-    if (Test-Path -LiteralPath $cachePath -ErrorAction SilentlyContinue) {
-        $item = Get-Item -LiteralPath $cachePath -ErrorAction SilentlyContinue
-        try { $cached = Get-Content -LiteralPath $cachePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop }
-        catch { $cached = $null }
-
-        $ttl = $TtlSeconds
-        if ($cached -and $NegativeTtlSeconds -gt 0 -and $NegativeProperty -and
-            $cached.PSObject.Properties[$NegativeProperty] -and -not [bool]$cached.$NegativeProperty) {
-            $ttl = $NegativeTtlSeconds
-        }
-        $stale = -not $item -or $item.LastWriteTime -lt $now.AddSeconds(-$ttl)
-
-        if ($item -and
-            (Get-Variable -Name $pathVar -Scope Script -ValueOnly) -eq $cwd -and
+    $now = [datetime]::UtcNow
+    $item = Get-Item -LiteralPath $cachePath -ErrorAction SilentlyContinue
+    if ($item) {
+        $memoryMatches = (Get-Variable -Name $pathVar -Scope Script -ValueOnly) -eq $cwd -and
             (Get-Variable -Name $cacheVar -Scope Script -ValueOnly) -eq $cachePath -and
-            (Get-Variable -Name $timeVar -Scope Script -ValueOnly) -eq $item.LastWriteTimeUtc) {
+            (Get-Variable -Name $timeVar -Scope Script -ValueOnly) -eq $item.LastWriteTimeUtc
+        if ($memoryMatches) {
             $text = Get-Variable -Name $textVar -Scope Script -ValueOnly
-        }
-        elseif ($cached) {
-            $cacheLastWriteTimeUtc = if ($item) { $item.LastWriteTimeUtc } else { [datetime]::MinValue }
-            if ($cached.Path -eq $cwd) { $text = & $Formatter $cached $cacheLastWriteTimeUtc }
-            Set-Variable -Name $pathVar -Scope Script -Value $cwd
-            Set-Variable -Name $cacheVar -Scope Script -Value $cachePath
-            Set-Variable -Name $timeVar -Scope Script -Value $cacheLastWriteTimeUtc
-            Set-Variable -Name $textVar -Scope Script -Value $text
+            $stale = $now -ge (Get-Variable -Name $expiresVar -Scope Script -ValueOnly)
         }
         else {
-            $stale = $true
-            Set-Variable -Name $pathVar -Scope Script -Value $cwd
-            Set-Variable -Name $cacheVar -Scope Script -Value $cachePath
-            Set-Variable -Name $timeVar -Scope Script -Value ([datetime]::MinValue)
-            Set-Variable -Name $textVar -Scope Script -Value ''
+            try { $cached = Get-Content -LiteralPath $cachePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop }
+            catch { $cached = $null }
+            if ($cached) {
+                $ttl = $TtlSeconds
+                if ($NegativeTtlSeconds -gt 0 -and $NegativeProperty -and
+                    $cached.PSObject.Properties[$NegativeProperty] -and -not [bool]$cached.$NegativeProperty) {
+                    $ttl = $NegativeTtlSeconds
+                }
+                $expiresUtc = $item.LastWriteTimeUtc.AddSeconds($ttl)
+                if ($cached.Path -eq $cwd) { $text = & $Formatter $cached $item.LastWriteTimeUtc }
+                $stale = $now -ge $expiresUtc
+                Set-Variable -Name $pathVar -Scope Script -Value $cwd
+                Set-Variable -Name $cacheVar -Scope Script -Value $cachePath
+                Set-Variable -Name $timeVar -Scope Script -Value $item.LastWriteTimeUtc
+                Set-Variable -Name $expiresVar -Scope Script -Value $expiresUtc
+                Set-Variable -Name $textVar -Scope Script -Value $text
+            }
         }
     }
-    else {
-        if ((Get-Variable -Name $pathVar -Scope Script -ValueOnly) -eq $cwd -and (Get-Variable -Name $cacheVar -Scope Script -ValueOnly) -eq $cachePath) {
-            Set-Variable -Name $timeVar -Scope Script -Value ([datetime]::MinValue)
-            Set-Variable -Name $textVar -Scope Script -Value ''
-        }
+    if (-not $item -or ($item -and -not $memoryMatches -and -not $cached)) {
+        Set-Variable -Name $pathVar -Scope Script -Value $cwd
+        Set-Variable -Name $cacheVar -Scope Script -Value $cachePath
+        Set-Variable -Name $timeVar -Scope Script -Value ([datetime]::MinValue)
+        Set-Variable -Name $expiresVar -Scope Script -Value ([datetime]::MinValue)
+        Set-Variable -Name $textVar -Scope Script -Value ''
+        $text = ''
+        $stale = $true
     }
 
     if ($stale) { & $Refresh $cwd $cachePath $lockPath }
@@ -784,6 +796,7 @@ function global:Get-AsyncToolchainStatusText {
 function global:prompt {
     $lastCommandSucceeded = $?
     $lastExitCode = $global:LASTEXITCODE
+    if (Test-Path function:\Update-FnmEnvironmentForPrompt) { Update-FnmEnvironmentForPrompt }
     $palette = $script:LeanPromptPalette
     $gitText = Get-AsyncGitStatusText
     $rightParts = @()

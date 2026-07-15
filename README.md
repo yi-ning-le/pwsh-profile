@@ -14,8 +14,8 @@ This repo keeps the profile portable without hiding missing dependencies. Modern
 - Right-aligned toolchain versions and command duration when the terminal is wide enough.
 - PSReadLine history suggestions, prefix history search, and zsh-style two-stage Tab completion (prefix first, menu on repeat) for interactive sessions.
 - Zsh-style path completion: `/` only inserts a separator, Tab performs case-insensitive segment-prefix completion, directories end in `/`, and hidden entries require an explicit `.` prefix.
-- Carapace external command completion and status-aware git path completion.
-- `fnm` Node.js auto-switching plus lazy default initialization for `node`, `npm`, `npx`, `pnpm`, `yarn`, and `corepack`.
+- Carapace external command completion, prewarmed on the first interactive idle, plus status-aware git path completion.
+- `fnm` Node.js auto-switching with asynchronous interactive prewarming and on-demand fallback for `node`, `npm`, `npx`, `pnpm`, `yarn`, and `corepack`.
 - Oh-my-zsh-style git aliases and directory navigation shortcuts.
 - Unix muscle-memory helpers such as `which`, `whereis`, `touch`, `mkcd`, `head`, `tail`, `export`, `env`, `open`, `df`, `refreshenv`, and `reload`.
 - Direct modern CLI wrappers:
@@ -29,10 +29,10 @@ This repo keeps the profile portable without hiding missing dependencies. Modern
 ```text
 profile/Microsoft.PowerShell_profile.ps1      entrypoint installed to $PROFILE.CurrentUserCurrentHost
 profile/profile.d/10-prompt.ps1              prompt, async cache orchestration, background process helper
-profile/profile.d/20-node.ps1                fnm integration and lazy Node command initialization
+profile/profile.d/20-node.ps1                fnm asynchronous environment initialization and Node wrappers
 profile/profile.d/25-icons.ps1               on-demand Terminal-Icons helper
 profile/profile.d/30-psreadline.ps1          PSReadLine options, keybindings, duration tracking
-profile/profile.d/40-completion.ps1          path completion, carapace cache, git path completion
+profile/profile.d/40-completion.ps1          generic path routing, carapace cache, git path completion
 profile/profile.d/50-aliases.ps1             lsd/bat/rg wrappers, git aliases, navigation helpers
 profile/profile.d/60-utils.ps1               small Unix-style utility functions
 profile/profile.d/prompt-updaters/*.ps1      async git/toolchain updater scripts
@@ -99,6 +99,8 @@ The right prompt shows project-local versions only when marker files are present
 
 Toolchain status is refreshed asynchronously and cached briefly, so prompt rendering does not block on version probes.
 
+Interactive sessions also start `fnm env --json` in the background while the rest of the profile loads. Node command wrappers wait for that result on first use and retry initialization once if prewarming failed; non-interactive command and file sessions initialize only when a Node command is used.
+
 ## Completion And Editing
 
 Interactive ConsoleHost sessions load PSReadLine with:
@@ -108,19 +110,26 @@ Interactive ConsoleHost sessions load PSReadLine with:
 - `UpArrow` / `DownArrow` prefix history search.
 - `Tab` two-stage completion (zsh `auto_menu` style): the first press completes the longest common prefix so typing can keep narrowing candidates; a second press on an unchanged line opens menu completion.
 - `Shift+Tab` opening menu completion directly (and moving backward inside an open menu).
+- `Ctrl+C` during completion restoring the command line to its state before Tab; inside the menu it exits the menu without clearing the line.
+- `Ctrl+C` outside completion retaining the normal behavior of clearing the current line and showing a new prompt.
 - `Ctrl+RightArrow` accepting the next suggestion word.
 - Command duration tracking for the prompt.
 
 Path completion follows the Zsh `compinit` interaction model with Windows-friendly matcher behavior:
 
+- The fast filesystem backend is selected from the current command AST, resolved aliases, and PowerShell parameter metadata rather than command-name special cases. Confirmed `Path`, `LiteralPath`, `Source`, `SourcePath`, `Destination`, and `DestinationPath` parameters share it; `Set-Location` and `Push-Location` path parameters are restricted to directories.
+- Native commands use the fast backend only for explicit local paths such as `./`, `../`, `~/`, drive-qualified paths, and rooted paths. Bare native arguments remain with Carapace or the command's default completer.
 - `/` is ordinary input and never starts completion; only Tab does. The first Tab completes a common prefix, while a repeated Tab opens the menu.
 - Matching follows a Windows-friendly Zsh `matcher-list` style: each path segment uses a case-insensitive prefix. Substring matching and `-`/`_` interchange are intentionally not applied.
 - Directories remain `ProviderContainer` candidates and end in `/`; file candidates advance with a trailing space. Quoted paths keep the suffix in the correct position.
 - Hidden entries appear only when the current segment starts with `.`, while unique intermediate segments continue to the next level and ambiguous segments stop at that level.
-- `~`, `.`, `..`, drive roots, UNC paths, PowerShell providers, and the separator style typed by the user are accepted; completed paths are displayed with `/`.
+- The fast backend supports `~`, `.`, `..`, drive roots, and local rooted paths. UNC paths, non-filesystem providers, wildcards, quoting, and complex expressions fall back to native completion instead of being guessed.
+- Confirmed local filesystem results use their real on-disk case and are displayed with `/`; fallback completers retain their candidate set and command-specific filtering.
 - A `/` inserted by directory completion has Zsh `AUTO_REMOVE_SLASH` behavior before another separator, Space, Enter, and command separators. Manually typed `/` is never treated as automatic.
 
-Carapace integration and custom git path completion remain available for commands such as `git add`, `git restore`, `git clean`, `git rm`, `git mv`, and `git commit`. Real-path results receive the same path rules; non-path results remain unchanged.
+Local filesystem enumeration checks for pending input while it runs. Ctrl+C cancels it silently, while another key stops completion and remains available to PSReadLine. A synchronous third-party completer cannot be forcibly unwound; if Ctrl+C arrives there, the saved command line is restored after that completer returns.
+
+Carapace is prewarmed once on the first interactive idle and remains available with custom git path completion for commands such as `git add`, `git restore`, `git clean`, `git rm`, `git mv`, and `git commit`. Real-path results receive the same path rules; non-path results remain unchanged.
 
 ## Aliases And Helpers
 

@@ -64,6 +64,69 @@ function Test-PwshZshPathPrefix {
     $true
 }
 
+function Resolve-PwshCompletionPathCase {
+    param(
+        [Parameter(Mandatory)][string] $Text,
+        [Parameter(Mandatory)][hashtable] $DirectoryMaps,
+        [string] $TypedWord
+    )
+
+    $path = Get-PwshCompletionLiteralPath $Text
+    if (-not $path -or $path -match '^(\\\\|//)' -or (Get-Location).Provider.Name -ne 'FileSystem') { return $null }
+    $slashPath = $path -replace '\\', '/'
+    $prefix = ''
+    $baseDir = (Get-Location).ProviderPath
+    if ($slashPath -match '^~/(.*)$') {
+        $baseDir = [Environment]::GetFolderPath('UserProfile'); $prefix = '~/'; $slashPath = $Matches[1]
+    }
+    elseif ($slashPath -match '^([A-Za-z]:)/?(.*)$') {
+        $baseDir = $Matches[1] + [System.IO.Path]::DirectorySeparatorChar
+        $prefix = $Matches[1] + '/'; $slashPath = $Matches[2]
+    }
+    elseif ($slashPath.StartsWith('/')) {
+        $baseDir = [System.IO.Path]::GetPathRoot($baseDir); $prefix = '/'; $slashPath = $slashPath.TrimStart('/')
+    }
+    elseif ($slashPath.StartsWith('./')) {
+        if (($TypedWord -replace '\\', '/').StartsWith('./')) { $prefix = './' }
+        $slashPath = $slashPath.Substring(2)
+    }
+
+    $actualParts = [System.Collections.Generic.List[string]]::new()
+    $item = $null
+    foreach ($segment in @($slashPath.Split([char]'/', [System.StringSplitOptions]::RemoveEmptyEntries))) {
+        if ($segment -in '.', '..') {
+            $actualParts.Add($segment)
+            try { $baseDir = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($baseDir, $segment)) }
+            catch { return $null }
+            continue
+        }
+        $mapKey = $baseDir.TrimEnd('\', '/')
+        if (-not $DirectoryMaps.ContainsKey($mapKey)) {
+            $map = [System.Collections.Generic.Dictionary[string, System.IO.FileSystemInfo]]::new(
+                [System.StringComparer]::OrdinalIgnoreCase
+            )
+            try {
+                foreach ($child in [System.IO.DirectoryInfo]::new($baseDir).EnumerateFileSystemInfos()) {
+                    if (-not $map.ContainsKey($child.Name)) { $map.Add($child.Name, $child) }
+                }
+            }
+            catch { return $null }
+            $DirectoryMaps[$mapKey] = $map
+        }
+        $map = $DirectoryMaps[$mapKey]
+        if (-not $map.TryGetValue($segment, [ref]$item)) { return $null }
+        $actualParts.Add($item.Name)
+        $baseDir = $item.FullName
+    }
+    if (-not $item) { return $null }
+    $candidate = $prefix + ($actualParts -join '/')
+    [pscustomobject]@{
+        Item = $item
+        Candidate = $candidate
+        ListItem = if ($actualParts.Count -gt 1) { $candidate } else { $item.Name }
+    }
+}
+
 function Convert-CompletionDisplayToSlashPath {
     param(
         [System.Management.Automation.CommandCompletion] $Completion,
@@ -80,10 +143,16 @@ function Convert-CompletionDisplayToSlashPath {
         $typedWord = $InputScript.Substring($Completion.ReplacementIndex, $typedLength)
     }
 
-    $matches = [System.Collections.ObjectModel.Collection[System.Management.Automation.CompletionResult]]::new()
+    $convertedMatches = [System.Collections.ObjectModel.Collection[System.Management.Automation.CompletionResult]]::new()
+    $directoryMaps = @{}
     foreach ($match in $Completion.CompletionMatches) {
-        if (-not (Test-PwshPathCompletionResult $match)) { $matches.Add($match); continue }
-        if ($typedWord -and -not (Test-PwshZshPathPrefix $typedWord $match.CompletionText)) { continue }
+        if (-not (Test-PwshPathCompletionResult $match)) { $convertedMatches.Add($match); continue }
+        $canonical = Resolve-PwshCompletionPathCase -Text $match.CompletionText -DirectoryMaps $directoryMaps -TypedWord $typedWord
+        if ($canonical) {
+            $convertedMatches.Add((New-PwshPathCompletionResult -Item $canonical.Item `
+                -CandidateText $canonical.Candidate -ListItemText $canonical.ListItem))
+            continue
+        }
 
         $literalPath = Get-PwshCompletionLiteralPath $match.CompletionText
         $isContainer = $match.ResultType -eq [System.Management.Automation.CompletionResultType]::ProviderContainer -or
@@ -107,7 +176,7 @@ function Convert-CompletionDisplayToSlashPath {
         if ($isContainer) { $listItemText = Add-PwshZshDirectorySuffix $listItemText }
         $toolTip = ConvertTo-LeanPromptSlashPath $match.ToolTip
 
-        $matches.Add([System.Management.Automation.CompletionResult]::new(
+        $convertedMatches.Add([System.Management.Automation.CompletionResult]::new(
             $completionText,
             $listItemText,
             $resultType,
@@ -116,7 +185,7 @@ function Convert-CompletionDisplayToSlashPath {
     }
 
     [System.Management.Automation.CommandCompletion]::new(
-        $matches,
+        $convertedMatches,
         $Completion.CurrentMatchIndex,
         $Completion.ReplacementIndex,
         $Completion.ReplacementLength
@@ -136,11 +205,12 @@ function New-PwshPathCompletionResult {
         "'" + ($candidate -replace "'", "''") + "'"
     } else { $candidate }
     $listItemDisplay = ConvertTo-LeanPromptSlashPath $listItemDisplay
-    if ($Item.PSIsContainer) {
+    $isContainer = $Item -is [System.IO.DirectoryInfo]
+    if ($isContainer) {
         $completionText = Add-PwshZshDirectorySuffix $completionText
         $listItemDisplay = Add-PwshZshDirectorySuffix $listItemDisplay
     } else { $completionText = Add-PwshZshFileSuffix $completionText }
-    $resultType = if ($Item.PSIsContainer) { 'ProviderContainer' } else { 'ProviderItem' }
+    $resultType = if ($isContainer) { 'ProviderContainer' } else { 'ProviderItem' }
 
     [System.Management.Automation.CompletionResult]::new(
         $completionText,
@@ -159,8 +229,10 @@ function New-PwshPathCompletionResult {
 $script:__PwshCompletionInterruptState = [hashtable]::Synchronized(@{ CtrlC = $false })
 $script:__PwshCompletionInterruptDepth = 0
 
-if (-not ('PwshProfile.ConsoleInput' -as [type])) {
-    Add-Type -Namespace PwshProfile -Name ConsoleInput -MemberDefinition @'
+function Initialize-PwshCompletionConsoleInput {
+    if ('PwshProfile.ConsoleInput' -as [type]) { return $true }
+    try {
+        Add-Type -Namespace PwshProfile -Name ConsoleInput -MemberDefinition @'
 [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true, CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
 public static extern System.IntPtr CreateFile(
     string fileName, uint desiredAccess, uint shareMode, System.IntPtr securityAttributes,
@@ -205,11 +277,15 @@ public const uint LEFT_CTRL_PRESSED = 0x0008;
 public const uint RIGHT_CTRL_PRESSED = 0x0004;
 public const int VK_C = 0x43;
 '@
+        $true
+    }
+    catch { $false }
 }
 
 function Test-PwshCompletionCtrlCPending {
     # Peek the real console input buffer for Ctrl+C without consuming it, so MenuComplete can
     # still see the key after we bail out of TabExpansion2.
+    if (-not (Initialize-PwshCompletionConsoleInput)) { return $false }
     try {
         $handle = [PwshProfile.ConsoleInput]::CreateFile(
             'CONIN$',
@@ -252,12 +328,15 @@ function Test-PwshCompletionCtrlCPending {
 
 function Test-PwshCompletionInterrupted {
     if ($script:__PwshCompletionInterruptState.CtrlC) { return $true }
+    # Check availability first so Ctrl+C cannot arrive between the Ctrl+C peek and this check
+    # and be mistaken for an unrelated key.
+    $inputPending = try { [Console]::KeyAvailable } catch { $false }
+    if (-not $inputPending) { return $false }
     if (Test-PwshCompletionCtrlCPending) {
         $script:__PwshCompletionInterruptState.CtrlC = $true
-        return $true
     }
     # Any other pending key also means the user wants out of a slow completer; leave the key queued.
-    try { [Console]::KeyAvailable } catch { $false }
+    $true
 }
 
 function Enter-PwshCompletionInterruptScope {
@@ -309,6 +388,7 @@ function Invoke-PwshInterruptibleNativeCommand {
         while (-not $process.HasExited) {
             if (Test-PwshCompletionInterrupted) {
                 try { $process.Kill($true) } catch { try { $process.Kill() } catch {} }
+                try { $null = $process.WaitForExit(1000) } catch {}
                 return @()
             }
             Start-Sleep -Milliseconds 20
@@ -327,21 +407,170 @@ function Invoke-PwshInterruptibleNativeCommand {
     }
 }
 
-# A word is in command position when it starts a CommandAst (zsh completes command names there).
 function Test-PwshCommandPositionWord {
+    param([string] $InputScript, [int] $WordStart)
+    $tokens = $null
+    $errors = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseInput($InputScript, [ref]$tokens, [ref]$errors)
+    foreach ($commandAst in $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] }, $true)) {
+        if ($commandAst.CommandElements[0].Extent.StartOffset -eq $WordStart) { return $true }
+    }
+    $false
+}
+
+# PowerShell's parameter metadata is sufficient for most path parameters, but it cannot express
+# that these two parameters accept containers only. Aliases are resolved before this table is read.
+$script:__PwshFileSystemParameterCapabilities = @{
+    'Microsoft.PowerShell.Management\Set-Location:Path' = 'Container'
+    'Microsoft.PowerShell.Management\Set-Location:LiteralPath' = 'Container'
+    'Microsoft.PowerShell.Management\Push-Location:Path' = 'Container'
+    'Microsoft.PowerShell.Management\Push-Location:LiteralPath' = 'Container'
+}
+
+function Get-PwshFileSystemCompletionContext {
     param(
         [string] $InputScript,
-        [int] $WordStart
+        [int] $CursorColumn
     )
+
+    $lineBeforeCursor = $InputScript.Substring(0, $CursorColumn)
+    $wordMatch = [regex]::Match($lineBeforeCursor, '([^\s]*)$')
+    $word = $wordMatch.Groups[1].Value
+    $wordStart = $wordMatch.Groups[1].Index
+    $defaultContext = [pscustomobject]@{
+        Backend = 'Default'; ItemKind = 'Any'; ReplacementIndex = $wordStart
+        ReplacementLength = $word.Length; TypedWord = $word
+        ResolvedCommand = $null; ParameterName = $null
+    }
+
+    # Quoting and expressions need PowerShell's binder. The filesystem engine intentionally handles
+    # only literal local paths so it cannot change wildcard or provider semantics.
+    if ($word -match '[`''"\[\]*?$(){};,|&<>]' -or $word -match '^(\\\\|//)' -or
+        ($word -match '^[A-Za-z][A-Za-z0-9]+:' -and $word -notmatch '^[A-Za-z]:')) {
+        return $defaultContext
+    }
 
     $tokens = $null
     $parseErrors = $null
     $ast = [System.Management.Automation.Language.Parser]::ParseInput($InputScript, [ref]$tokens, [ref]$parseErrors)
-    foreach ($commandAst in $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] }, $true)) {
-        $firstElement = $commandAst.CommandElements[0]
-        if ($firstElement -and $firstElement.Extent.StartOffset -eq $WordStart) { return $true }
+    $commands = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] }, $true) |
+        Where-Object { $_.Extent.StartOffset -le $wordStart } | Sort-Object { $_.Extent.StartOffset })
+    if ($commands.Count -eq 0) { return $defaultContext }
+    $commandAst = $commands[-1]
+    if ($commandAst.Extent.EndOffset -lt $wordStart) {
+        $gap = $InputScript.Substring($commandAst.Extent.EndOffset, $wordStart - $commandAst.Extent.EndOffset)
+        if ($gap -notmatch '^\s+$') { return $defaultContext }
     }
-    $false
+
+    $firstElement = $commandAst.CommandElements[0]
+    if (-not $firstElement -or $firstElement.Extent.StartOffset -eq $wordStart) { return $defaultContext }
+    $commandName = $commandAst.GetCommandName()
+    if ([string]::IsNullOrWhiteSpace($commandName)) { return $defaultContext }
+
+    $command = Get-Command $commandName -ErrorAction SilentlyContinue | Select-Object -First 1
+    while ($command -is [System.Management.Automation.AliasInfo]) {
+        $command = Get-Command $command.Definition -ErrorAction SilentlyContinue | Select-Object -First 1
+    }
+    $defaultContext.ResolvedCommand = $command
+    if (-not $command) { return $defaultContext }
+
+    $isExplicitLocalPath = $word -match '^(?:\.\.?[\\/]|~[\\/]|[A-Za-z]:|[\\/](?![\\/]))'
+    if ($command.CommandType -in @(
+        [System.Management.Automation.CommandTypes]::Application,
+        [System.Management.Automation.CommandTypes]::ExternalScript
+    )) {
+        if (-not $isExplicitLocalPath) { return $defaultContext }
+        $defaultContext.Backend = 'FileSystem'
+        return $defaultContext
+    }
+
+    if (-not $command.Parameters) { return $defaultContext }
+    if (-not $isExplicitLocalPath -and (Get-Location).Provider.Name -ne 'FileSystem') { return $defaultContext }
+    $elements = @($commandAst.CommandElements | Select-Object -Skip 1)
+    $pendingParameter = $null
+    $parameterName = $null
+    $position = 0
+    $usedPositions = [System.Collections.Generic.HashSet[int]]::new()
+    $resolveParameter = {
+        param([string] $Name)
+        $parameter = $command.Parameters[$Name]
+        if ($parameter) { return $parameter }
+        $possible = @($command.Parameters.Values | Where-Object {
+            $_.Name.StartsWith($Name, [System.StringComparison]::OrdinalIgnoreCase)
+        })
+        if ($possible.Count -eq 1) { $possible[0] }
+    }
+    foreach ($element in $elements) {
+        if ($element -is [System.Management.Automation.Language.CommandParameterAst]) {
+            if ($element.Extent.StartOffset -eq $wordStart) { return $defaultContext }
+            $pendingParameter = $element.ParameterName
+            if ($element.Argument -and $element.Argument.Extent.StartOffset -le $wordStart -and
+                $element.Argument.Extent.EndOffset -ge $wordStart) {
+                $parameterName = $pendingParameter
+                break
+            }
+            continue
+        }
+        if ($element.Extent.StartOffset -gt $wordStart) { break }
+        if ($element.Extent.StartOffset -eq $wordStart) {
+            if ($pendingParameter) { $parameterName = $pendingParameter }
+            break
+        }
+        if ($pendingParameter) {
+            $boundParameter = & $resolveParameter $pendingParameter
+            if ($boundParameter) {
+                $boundPositionFound = $false
+                foreach ($attribute in $boundParameter.Attributes) {
+                    if ($attribute -is [System.Management.Automation.ParameterAttribute] -and $attribute.Position -ge 0) {
+                        [void]$usedPositions.Add($attribute.Position)
+                        $boundPositionFound = $true
+                    }
+                }
+                if (-not $boundPositionFound -and $boundParameter.Name -in 'Path', 'LiteralPath', 'Source', 'SourcePath') {
+                    [void]$usedPositions.Add(0)
+                }
+                elseif (-not $boundPositionFound -and $boundParameter.Name -in 'Destination', 'DestinationPath') {
+                    [void]$usedPositions.Add(1)
+                }
+            }
+            $pendingParameter = $null
+        }
+        else {
+            while ($usedPositions.Contains($position)) { $position++ }
+            [void]$usedPositions.Add($position)
+            $position++
+        }
+    }
+    if (-not $parameterName -and $word.Length -eq 0 -and $pendingParameter) {
+        $parameterName = $pendingParameter
+    }
+    while ($usedPositions.Contains($position)) { $position++ }
+
+    if ($parameterName) {
+        $exactParameter = & $resolveParameter $parameterName
+        if (-not $exactParameter) { return $defaultContext }
+        $parameterName = $exactParameter.Name
+    }
+    else {
+        $positionalNames = @($command.Parameters.Values | Where-Object {
+            @($_.Attributes | Where-Object {
+                $_ -is [System.Management.Automation.ParameterAttribute] -and $_.Position -eq $position
+            }).Count -gt 0
+        } | Select-Object -ExpandProperty Name -Unique)
+        if ($positionalNames.Count -ne 1) { return $defaultContext }
+        $parameterName = $positionalNames[0]
+    }
+
+    if ($parameterName -notin @('Path', 'LiteralPath', 'Destination', 'DestinationPath', 'Source', 'SourcePath')) {
+        return $defaultContext
+    }
+    $defaultContext.ParameterName = $parameterName
+    $defaultContext.Backend = 'FileSystem'
+    $capabilityKey = '{0}\{1}:{2}' -f $command.ModuleName, $command.Name, $parameterName
+    if ($script:__PwshFileSystemParameterCapabilities[$capabilityKey] -eq 'Container') {
+        $defaultContext.ItemKind = 'Container'
+    }
+    $defaultContext
 }
 
 function Get-PwshZshPathCompletion {
@@ -354,6 +583,40 @@ function Get-PwshZshPathCompletion {
 
     if ($Word -match '^(\\\\|//)') { return $null }              # UNC paths stay with the native completer.
     if ($Word -match '^[A-Za-z][A-Za-z0-9]+:') { return $null }     # Non-drive PSProviders stay native.
+
+    $emptyCompletion = [System.Management.Automation.CommandCompletion]::new(
+        [System.Collections.ObjectModel.Collection[System.Management.Automation.CompletionResult]]::new(),
+        -1,
+        $ReplacementIndex,
+        $ReplacementLength
+    )
+    if (Test-PwshCompletionInterrupted) { return $emptyCompletion }
+
+    # Local filesystem enumeration is lazy so pending input can stop a large directory without
+    # waiting for Get-ChildItem and Sort-Object to materialize the entire provider result first.
+    $enumerateFileSystemItems = {
+        param([string] $Path, [bool] $DirectoriesOnly)
+
+        if (Test-PwshCompletionInterrupted) { return }
+        try {
+            $directory = [System.IO.DirectoryInfo]::new($Path)
+            $items = if ($DirectoriesOnly) {
+                $directory.EnumerateDirectories()
+            }
+            else {
+                $directory.EnumerateFileSystemInfos()
+            }
+            $index = 0
+            foreach ($item in $items) {
+                if (($index++ -band 31) -eq 0 -and (Test-PwshCompletionInterrupted)) { return }
+                $item
+            }
+        }
+        catch [System.UnauthorizedAccessException] {}
+        catch [System.IO.DirectoryNotFoundException] {}
+        catch [System.IO.IOException] {}
+        catch [System.Security.SecurityException] {}
+    }
 
     $segments = $Word -split '[\\/]'
     $segmentIndex = 0
@@ -383,31 +646,37 @@ function Get-PwshZshPathCompletion {
         $typedPrefix += $segments[$segmentIndex] + '/'
         $segmentIndex++
     }
-    if (-not $baseDir -or -not (Test-Path -LiteralPath $baseDir -PathType Container)) { return $null }
+    if (-not $baseDir -or -not [System.IO.Directory]::Exists($baseDir)) { return $emptyCompletion }
 
     $lastIndex = $segments.Count - 1
+    $resolvedIntermediateSegment = $false
     for ($i = $segmentIndex; $i -lt $lastIndex; $i++) {
-        if (Test-PwshCompletionInterrupted) { return $null }
+        $resolvedIntermediateSegment = $true
+        if (Test-PwshCompletionInterrupted) { return $emptyCompletion }
         $segment = $segments[$i]
-        if ([string]::IsNullOrEmpty($segment)) { return $null }
+        if ([string]::IsNullOrEmpty($segment)) { return $emptyCompletion }
         if ($segment -in '.', '..') {
             $baseDir = Join-Path $baseDir $segment
             $typedPrefix += $segment + '/'
             continue
         }
-        $matched = @(Get-ChildItem -LiteralPath $baseDir -Directory -Force -ErrorAction SilentlyContinue |
+        if (Test-PwshCompletionInterrupted) { return $emptyCompletion }
+        $matched = @(& $enumerateFileSystemItems $baseDir $true |
             Where-Object {
                 (-not $_.Name.StartsWith('.') -or $segment.StartsWith('.')) -and
                 $_.Name.StartsWith($segment, [System.StringComparison]::OrdinalIgnoreCase)
             } | Sort-Object Name)
+        if (Test-PwshCompletionInterrupted) { return $emptyCompletion }
         $exact = @($matched | Where-Object { $_.Name.Equals($segment, [System.StringComparison]::OrdinalIgnoreCase) })
         if ($exact.Count -eq 1) { $matched = $exact }
         if ($matched.Count -ne 1) {
-            if ($matched.Count -eq 0) { return $null }
+            if ($matched.Count -eq 0) { return $emptyCompletion }
             $completionMatches = [System.Collections.ObjectModel.Collection[System.Management.Automation.CompletionResult]]::new()
             foreach ($directory in $matched) {
+                if (Test-PwshCompletionInterrupted) { return $emptyCompletion }
                 $completionMatches.Add((New-PwshPathCompletionResult -Item $directory `
                     -CandidateText ($typedPrefix + $directory.Name) -ListItemText ($typedPrefix + $directory.Name)))
+                if ($completionMatches.Count -ge 100) { break }
             }
             return [System.Management.Automation.CommandCompletion]::new(
                 $completionMatches, -1, $ReplacementIndex, $ReplacementLength
@@ -419,18 +688,21 @@ function Get-PwshZshPathCompletion {
 
     $leaf = $segments[$lastIndex]
     $completionMatches = [System.Collections.ObjectModel.Collection[System.Management.Automation.CompletionResult]]::new()
-    $children = Get-ChildItem -LiteralPath $baseDir -Force -ErrorAction SilentlyContinue |
+    if (Test-PwshCompletionInterrupted) { return $emptyCompletion }
+    $children = @(& $enumerateFileSystemItems $baseDir ([bool]$DirectoriesOnly) |
         Where-Object {
-            (-not $DirectoriesOnly -or $_.PSIsContainer) -and
             (-not $_.Name.StartsWith('.') -or $leaf.StartsWith('.')) -and
             $_.Name.StartsWith($leaf, [System.StringComparison]::OrdinalIgnoreCase)
-        } | Sort-Object -Property @{ Expression = 'PSIsContainer'; Descending = $true }, Name
+        } | Sort-Object -Property @{ Expression = { $_ -is [System.IO.DirectoryInfo] }; Descending = $true }, Name)
+    if (Test-PwshCompletionInterrupted) { return $emptyCompletion }
     foreach ($item in $children) {
+        if (Test-PwshCompletionInterrupted) { return $emptyCompletion }
         $candidate = $typedPrefix + $item.Name
-        $completionMatches.Add((New-PwshPathCompletionResult -Item $item -CandidateText $candidate -ListItemText $candidate))
+        $listItemText = if ($resolvedIntermediateSegment) { $candidate } else { $item.Name }
+        $completionMatches.Add((New-PwshPathCompletionResult -Item $item `
+            -CandidateText $candidate -ListItemText $listItemText))
         if ($completionMatches.Count -ge 100) { break }
     }
-    if ($completionMatches.Count -eq 0) { return $null }
 
     [System.Management.Automation.CommandCompletion]::new(
         $completionMatches,
@@ -472,6 +744,25 @@ function TabExpansion2 {
             )
         }
 
+        $context = Get-PwshFileSystemCompletionContext -InputScript $inputScript -CursorColumn $cursorColumn
+        if ($context.Backend -eq 'FileSystem') {
+            $pathCompletion = Get-PwshZshPathCompletion -Word $context.TypedWord `
+                -ReplacementIndex $context.ReplacementIndex `
+                -ReplacementLength $context.ReplacementLength `
+                -DirectoriesOnly:($context.ItemKind -eq 'Container')
+            if ($pathCompletion) { return $pathCompletion }
+        }
+
+        Initialize-PwshCarapaceCompletion
+        if (Test-PwshCompletionInterrupted) {
+            return [System.Management.Automation.CommandCompletion]::new(
+                [System.Collections.ObjectModel.Collection[System.Management.Automation.CompletionResult]]::new(),
+                -1,
+                $cursorColumn,
+                0
+            )
+        }
+
         $defaultRaw = $null
         try { $defaultRaw = __PwshZshDefaultTabExpansion2 @PSBoundParameters } catch { $defaultRaw = $null }
         if (Test-PwshCompletionInterrupted) {
@@ -492,21 +783,6 @@ function TabExpansion2 {
         }
         $default = Convert-CompletionDisplayToSlashPath -Completion $defaultRaw `
             -InputScript $inputScript -CursorColumn $cursorColumn
-        if ($default.CompletionMatches.Count -gt 0) { return $default }
-
-        $lineBeforeCursor = $inputScript.Substring(0, $cursorColumn)
-        if ($lineBeforeCursor -notmatch '([^\s''"]+)$') { return $default }
-        $word = $Matches[1]
-        if ([string]::IsNullOrWhiteSpace($word) -or $word -match '[`''"\[\]*?$(){};,|&<>]') { return $default }
-        $wordStart = $cursorColumn - $word.Length
-        if ($word.StartsWith('-') -or $word.StartsWith('@') -or
-            (Test-PwshCommandPositionWord -InputScript $inputScript -WordStart $wordStart)) { return $default }
-
-        $directoriesOnly = $lineBeforeCursor.Substring(0, $wordStart) -match
-            '(?i)(?:^|[;|]\s*)(?:cd|chdir|sl|Set-Location|pushd)\s+$'
-        $pathCompletion = Get-PwshZshPathCompletion -Word $word.Trim('''"') `
-            -ReplacementIndex $wordStart -ReplacementLength $word.Length -DirectoriesOnly:$directoriesOnly
-        if ($pathCompletion) { return $pathCompletion }
         $default
     }
     finally {
@@ -516,65 +792,105 @@ function TabExpansion2 {
 # <<< zsh-style path completion <<<
 
 # ---- Carapace: Tab completion for git/npm/docker/gh and ~1000 external commands ----
-# (Similar to bash/zsh command completion on Linux; works with Tab=MenuComplete above.)
-if (Get-Command carapace -CommandType Application -ErrorAction SilentlyContinue) {
-    $env:CARAPACE_BRIDGES = 'zsh,fish,bash,inshellisense'   # Fall back to other shells when a command is missing
-    $__profileCacheDir = Join-Path $env:LOCALAPPDATA 'PowerShell\ProfileCache'
-    $__carapaceCache = Join-Path $__profileCacheDir 'carapace.ps1'
-    $__carapaceRefresh = Join-Path $__profileCacheDir 'Update-CarapaceCache.ps1'
-    $__carapaceRefreshScript = @'
-    param([Parameter(Mandatory)][string] $CachePath)
+# Load once on the first Tab so command completion remains rich without delaying the first prompt.
+$script:__PwshCarapaceInitializationState = 'NotStarted'
+$script:__PwshCarapaceInitializationWarningShown = $false
+function Initialize-PwshCarapaceCompletion {
+    param([switch] $Prewarm)
+
+    if ($script:__PwshCarapaceInitializationState -in 'Ready', 'Unavailable' -or
+        $script:__PwshCarapaceInitializationState -eq 'Initializing') { return }
+
+    $script:__PwshCarapaceInitializationState = 'Initializing'
+    try {
+        $__carapaceCommand = Get-Command carapace -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $__carapaceCommand) {
+            throw 'Carapace executable was not found.'
+        }
+
+        $env:CARAPACE_BRIDGES = 'zsh,fish,bash,inshellisense'   # Fall back to other shells when a command is missing
+        $__profileCacheDir = Join-Path $env:LOCALAPPDATA 'PowerShell\ProfileCache'
+        $__carapaceCache = Join-Path $__profileCacheDir 'carapace.ps1'
+        $__carapaceRefresh = Join-Path $__profileCacheDir 'Update-CarapaceCache.ps1'
+        $__carapaceRefreshScript = @'
+    param(
+        [Parameter(Mandatory)][string] $CachePath,
+        [Parameter(Mandatory)][string] $CarapacePath
+    )
     $ErrorActionPreference = 'Stop'
+    $PSNativeCommandUseErrorActionPreference = $false
     $env:CARAPACE_BRIDGES = 'zsh,fish,bash,inshellisense'
     $cacheDir = Split-Path -Parent $CachePath
     New-Item -ItemType Directory -Force -Path $cacheDir | Out-Null
-    $script = carapace _carapace powershell | Out-String
-    $old = '$_.ListItemText.replace(''`e['', "`e[")'
-    $old = $old -replace '\"','"'
-    $script = $script.Replace($old, '(' + $old + ' -replace "\x1b\[[0-9;]*m","")')
     $tmp = "$CachePath.tmp"
-    Set-Content -LiteralPath $tmp -Value $script -Encoding UTF8
-    Move-Item -LiteralPath $tmp -Destination $CachePath -Force
+    try {
+        $script = & $CarapacePath _carapace powershell | Out-String
+        if ($global:LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($script)) {
+            throw "carapace cache generation failed (exit $global:LASTEXITCODE)"
+        }
+        $old = '$_.ListItemText.replace(''`e['', "`e[")'
+        $old = $old -replace '\"','"'
+        $script = $script.Replace($old, '(' + $old + ' -replace "\x1b\[[0-9;]*m","")')
+        Set-Content -LiteralPath $tmp -Value $script -Encoding UTF8
+        Move-Item -LiteralPath $tmp -Destination $CachePath -Force
+    }
+    finally {
+        Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+    }
 '@
 
-    New-Item -ItemType Directory -Force -Path $__profileCacheDir | Out-Null
-    if ((-not (Test-Path -LiteralPath $__carapaceRefresh)) -or ((Get-Content -LiteralPath $__carapaceRefresh -Raw -ErrorAction SilentlyContinue) -ne $__carapaceRefreshScript)) {
-        Set-Content -LiteralPath $__carapaceRefresh -Value $__carapaceRefreshScript -Encoding UTF8
-    }
-
-    if (-not (Test-Path -LiteralPath $__carapaceCache)) {
-        & $__carapaceRefresh -CachePath $__carapaceCache
-    }
-
-    if (Test-Path -LiteralPath $__carapaceCache) {
-        . $__carapaceCache
-
-        $__carapaceCacheItem = Get-Item -LiteralPath $__carapaceCache
-        $__carapaceCommand = Get-Command carapace -CommandType Application -ErrorAction SilentlyContinue
-        $__carapaceStale = $__carapaceCacheItem.LastWriteTime -lt (Get-Date).AddDays(-7)
-        if ($__carapaceCommand -and $__carapaceCommand.Source -and (Test-Path -LiteralPath $__carapaceCommand.Source)) {
-            $__carapaceStale = $__carapaceStale -or ((Get-Item -LiteralPath $__carapaceCommand.Source).LastWriteTime -gt $__carapaceCacheItem.LastWriteTime)
+        New-Item -ItemType Directory -Force -Path $__profileCacheDir | Out-Null
+        if ((-not (Test-Path -LiteralPath $__carapaceRefresh)) -or ((Get-Content -LiteralPath $__carapaceRefresh -Raw -ErrorAction SilentlyContinue) -ne $__carapaceRefreshScript)) {
+            Set-Content -LiteralPath $__carapaceRefresh -Value $__carapaceRefreshScript -Encoding UTF8
         }
 
-        if ($__carapaceStale) {
+        if (-not (Test-Path -LiteralPath $__carapaceCache)) {
             $__pwsh = Join-Path $PSHOME 'pwsh.exe'
-            if (Test-Path -LiteralPath $__pwsh) {
-                Start-ProfileBackgroundPowerShell -ScriptPath $__carapaceRefresh -Arguments @('-CachePath', $__carapaceCache) | Out-Null
+            if (-not (Test-Path -LiteralPath $__pwsh)) { throw 'pwsh executable was not found for Carapace cache generation.' }
+            Invoke-PwshInterruptibleNativeCommand -FilePath $__pwsh -ArgumentList @(
+                '-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $__carapaceRefresh,
+                '-CachePath', $__carapaceCache, '-CarapacePath', $__carapaceCommand.Source
+            ) | Out-Null
+            if (Test-PwshCompletionInterrupted) {
+                Remove-Item -LiteralPath "$__carapaceCache.tmp" -Force -ErrorAction SilentlyContinue
+                $script:__PwshCarapaceInitializationState = 'NotStarted'
+                return
+            }
+            if (-not (Test-Path -LiteralPath $__carapaceCache)) { throw 'Carapace cache was not generated.' }
+        }
+
+        if (Test-Path -LiteralPath $__carapaceCache) {
+            . $__carapaceCache
+
+            $__carapaceCacheItem = Get-Item -LiteralPath $__carapaceCache
+            $__carapaceStale = $__carapaceCacheItem.LastWriteTime -lt (Get-Date).AddDays(-7)
+            if ($__carapaceCommand -and $__carapaceCommand.Source -and (Test-Path -LiteralPath $__carapaceCommand.Source)) {
+                $__carapaceStale = $__carapaceStale -or ((Get-Item -LiteralPath $__carapaceCommand.Source).LastWriteTime -gt $__carapaceCacheItem.LastWriteTime)
+            }
+
+            if ($__carapaceStale) {
+                $__pwsh = Join-Path $PSHOME 'pwsh.exe'
+                if (Test-Path -LiteralPath $__pwsh) {
+                    Start-ProfileBackgroundPowerShell -ScriptPath $__carapaceRefresh -Arguments @(
+                        '-CachePath', $__carapaceCache,
+                        '-CarapacePath', $__carapaceCommand.Source
+                    ) | Out-Null
+                }
             }
         }
-    }
 
-    Remove-Variable __profileCacheDir, __carapaceCache, __carapaceRefresh, __carapaceRefreshScript, __carapaceCacheItem, __carapaceCommand, __carapaceStale, __pwsh -ErrorAction SilentlyContinue
-
-    # ---- git path completion: status-aware, stepwise directory completion by subcommand (like native Linux git completion) ----
-    # Problem: carapace cannot descend directories step by step on Windows (known bug), and each subcommand should get different candidates.
-    # Approach: copy git-completion-style filters, pick git file lists by subcommand, then expand step by step from the typed prefix:
-    #       add/stage -> modified + untracked working tree files (exclude fully staged files); rm/mv -> tracked files; clean -> untracked files;
-    #       commit -> staged files; restore -> modified working tree files (or staged files with --staged/-S).
-    #       Directory candidates are marked ProviderContainer so the shared path layer adds `/`.
-    # Leave checkout/reset/diff alone (they mainly complete refs/branches); hand all other subcommands/flags to carapace.
-    if (Get-Variable -Name _carapace_completer -ErrorAction SilentlyContinue) {
-        $__carapaceNative = $_carapace_completer
+        # ---- git path completion: status-aware, stepwise directory completion by subcommand (like native Linux git completion) ----
+        # Problem: carapace cannot descend directories step by step on Windows (known bug), and each subcommand should get different candidates.
+        # Approach: copy git-completion-style filters, pick git file lists by subcommand, then expand step by step from the typed prefix:
+        #       add/stage -> modified + untracked working tree files (exclude fully staged files); rm/mv -> tracked files; clean -> untracked files;
+        #       commit -> staged files; restore -> modified working tree files (or staged files with --staged/-S).
+        #       Directory candidates are marked ProviderContainer so the shared path layer adds `/`.
+        # Leave checkout/reset/diff alone (they mainly complete refs/branches); hand all other subcommands/flags to carapace.
+        $__carapaceCompleter = Get-Variable -Name _carapace_completer -ErrorAction SilentlyContinue
+        if (-not $__carapaceCompleter -or $__carapaceCompleter.Value -isnot [scriptblock]) {
+            throw 'Carapace cache did not define its PowerShell completer.'
+        }
+        $__carapaceNative = $__carapaceCompleter.Value
         $__gitPathSubcmds = @('add', 'stage', 'restore', 'rm', 'mv', 'clean', 'commit')
         Register-ArgumentCompleter -Native -CommandName 'git', 'git.exe' -ScriptBlock {
             param($wordToComplete, $commandAst, $cursorPosition)
@@ -675,6 +991,56 @@ if (Get-Command carapace -CommandType Application -ErrorAction SilentlyContinue)
             }
             & $__carapaceNative $wordToComplete $commandAst $cursorPosition
         }.GetNewClosure()
+        $script:__PwshCarapaceInitializationState = 'Ready'
+    }
+    catch {
+        Remove-Item -LiteralPath (Join-Path $env:LOCALAPPDATA 'PowerShell\ProfileCache\carapace.ps1.tmp') -Force -ErrorAction SilentlyContinue
+        if ($Prewarm -or (Test-PwshCompletionInterrupted)) {
+            $script:__PwshCarapaceInitializationState = 'NotStarted'
+            return
+        }
+        $script:__PwshCarapaceInitializationState = 'Unavailable'
+        if (-not $script:__PwshCarapaceInitializationWarningShown) {
+            $script:__PwshCarapaceInitializationWarningShown = $true
+            Write-Warning "Carapace completion initialization failed; using native completion. $($_.Exception.Message)"
+        }
     }
 }
+
+function Start-PwshCompletionPrewarm {
+    if ($script:__PwshCarapaceInitializationState -ne 'NotStarted') { return }
+
+    try {
+        if (-not (Initialize-PwshCompletionConsoleInput)) { return }
+        Initialize-PwshCarapaceCompletion -Prewarm
+    }
+    finally {
+        # OnIdle is outside a completion action; leave queued Ctrl+C for the normal CancelLine handler.
+        if ($null -eq $script:__PwshCompletionActionState -and $script:__PwshCompletionInterruptState) {
+            $script:__PwshCompletionInterruptState.CtrlC = $false
+        }
+    }
+}
+
+$script:__PwshCompletionPrewarmSourceId = 'PowerShell.OnIdle'
+$__pwshCompletionPrewarmSubscriber = if ($script:__PwshCompletionPrewarmSubscriptionId) {
+    Get-EventSubscriber -SubscriptionId $script:__PwshCompletionPrewarmSubscriptionId -ErrorAction SilentlyContinue
+}
+if (-not $__pwshCompletionPrewarmSubscriber) {
+    if ($script:__PwshCompletionPrewarmJobId) {
+        Get-Job -Id $script:__PwshCompletionPrewarmJobId -ErrorAction SilentlyContinue |
+            Where-Object State -NE Running |
+            Remove-Job -Force -ErrorAction SilentlyContinue
+    }
+    $__pwshCompletionPrewarmJob = Register-EngineEvent -SourceIdentifier $script:__PwshCompletionPrewarmSourceId -MaxTriggerCount 1 -Action {
+        try { Start-PwshCompletionPrewarm }
+        finally { $EventSubscriber.Action | Remove-Job -Force -ErrorAction SilentlyContinue }
+    }
+    $__pwshCompletionPrewarmSubscriber = Get-EventSubscriber -SourceIdentifier $script:__PwshCompletionPrewarmSourceId |
+        Where-Object Action -EQ $__pwshCompletionPrewarmJob |
+        Select-Object -First 1
+    $script:__PwshCompletionPrewarmSubscriptionId = $__pwshCompletionPrewarmSubscriber.SubscriptionId
+    $script:__PwshCompletionPrewarmJobId = $__pwshCompletionPrewarmJob.Id
+}
+Remove-Variable __pwshCompletionPrewarmSubscriber, __pwshCompletionPrewarmJob -ErrorAction SilentlyContinue
 }
