@@ -632,7 +632,7 @@ function Get-PwshZshPathCompletion {
         $typedPrefix = $segments[0] + '/'
         $segmentIndex = 1
     }
-    elseif ($segments[0] -eq '') {
+    elseif ($Word.Length -gt 0 -and $segments[0] -eq '') {
         $baseDir = [System.IO.Path]::GetPathRoot((Get-Location).Path)
         $typedPrefix = '/'
         $segmentIndex = 1
@@ -687,10 +687,12 @@ function Get-PwshZshPathCompletion {
     }
 
     $leaf = $segments[$lastIndex]
+    $hiddenAttributes = [System.IO.FileAttributes]::Hidden -bor [System.IO.FileAttributes]::System
     $completionMatches = [System.Collections.ObjectModel.Collection[System.Management.Automation.CompletionResult]]::new()
     if (Test-PwshCompletionInterrupted) { return $emptyCompletion }
     $children = @(& $enumerateFileSystemItems $baseDir ([bool]$DirectoriesOnly) |
         Where-Object {
+            (-not ($_.Attributes -band $hiddenAttributes) -or $leaf.Length -gt 0) -and
             (-not $_.Name.StartsWith('.') -or $leaf.StartsWith('.')) -and
             $_.Name.StartsWith($leaf, [System.StringComparison]::OrdinalIgnoreCase)
         } | Sort-Object -Property @{ Expression = { $_ -is [System.IO.DirectoryInfo] }; Descending = $true }, Name)

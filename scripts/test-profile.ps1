@@ -224,7 +224,7 @@ $WarningPreference = 'Stop'
 . $env:PWSH_PROFILE_SOURCE
 
 if ($script:__PwshProfileIsInteractive) { throw 'redirected command session was classified as interactive' }
-if (Test-Path function:\Get-PwshTabCompletionAction) { throw 'PSReadLine profile part loaded in a batch command session' }
+if (Test-Path function:\Invoke-PwshCompletionAction) { throw 'PSReadLine profile part loaded in a batch command session' }
 if (Test-Path function:\__PwshZshDefaultTabExpansion2) { throw 'completion profile part loaded in a batch command session' }
 if (Get-EventSubscriber -SourceIdentifier 'PowerShell.OnIdle' -ErrorAction SilentlyContinue) {
     throw 'completion prewarm was registered in a batch command session'
@@ -398,6 +398,33 @@ function global:Start-AsyncGitStatusRefresh { param($Path, $CachePath, $LockPath
 $script:__AsyncGitStatusCacheDir = Join-Path $env:LOCALAPPDATA 'NoSyncGit'
 $null = Get-AsyncGitStatusText
 
+$locationBranchRoot = Join-Path ([System.IO.Path]::GetTempPath()) "lean-prompt-location-branch-$PID"
+$locationBranchStart = Get-Location
+try {
+    New-Item -ItemType Directory -Force -Path $locationBranchRoot | Out-Null
+    $script:__AsyncGitStatusCacheDir = Join-Path $locationBranchRoot 'cache'
+    $script:__LocationBranchGitCalls = @()
+    function global:git {
+        $script:__LocationBranchGitCalls += ($args -join ' ')
+        $global:LASTEXITCODE = 0
+        'entered-branch'
+    }
+
+    Set-Location $locationBranchRoot
+    $locationBranchText = Remove-LeanPromptAnsi (Get-AsyncGitStatusText)
+    if ($locationBranchText -notmatch 'entered-branch') {
+        throw "location change did not refresh the Git branch immediately: [$locationBranchText]"
+    }
+    if ($script:__LocationBranchGitCalls.Count -ne 1 -or
+        $script:__LocationBranchGitCalls[0] -notmatch 'rev-parse --abbrev-ref HEAD') {
+        throw "location change used unexpected Git plumbing: [$($script:__LocationBranchGitCalls -join '; ')]"
+    }
+}
+finally {
+    Set-Location $locationBranchStart
+    Remove-Item -LiteralPath $locationBranchRoot -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 $memoryCacheRoot = Join-Path ([System.IO.Path]::GetTempPath()) "lean-prompt-memory-$PID"
 $memoryLocation = Get-Location
 try {
@@ -462,6 +489,11 @@ $successfulPrompt = prompt
 Assert-Equal $successfulPrompt "PATH-CGIT`n${esc}[38;5;76m❯${esc}[0m " 'classic successful prompt snapshot'
 Assert-Equal $global:LASTEXITCODE 42 'successful prompt LASTEXITCODE'
 if ($failedPrompt -ceq $successfulPrompt) { throw 'successful and failed prompt snapshots are identical' }
+$script:__LeanPromptStatusOverride = $false
+$null = 1
+$interruptedPrompt = prompt
+Assert-Equal $interruptedPrompt $failedPrompt 'interrupted prompt snapshot'
+$script:__LeanPromptStatusOverride = $null
 '@
     Invoke-PwshChecked -Name 'RuntimeSmoke' -Arguments @('-NoLogo', '-NoProfile', '-Command', $smokeScript)
 
@@ -471,13 +503,13 @@ $ErrorActionPreference = 'Stop'
 $WarningPreference = 'Stop'
 . $env:PWSH_PROFILE_SOURCE
 if ($script:__PwshProfileIsInteractive) { throw 'file session was classified as interactive' }
-if (Test-Path function:\Get-PwshTabCompletionAction) { throw 'PSReadLine profile part loaded in a file session' }
+if (Test-Path function:\Invoke-PwshCompletionAction) { throw 'PSReadLine profile part loaded in a file session' }
 if (Test-Path function:\__PwshZshDefaultTabExpansion2) { throw 'completion profile part loaded in a file session' }
 if (-not (Test-Path function:\prompt) -or -not (Test-Path function:\grep)) { throw 'base profile parts did not load in a file session' }
 '@
     Invoke-PwshChecked -Name 'BatchFileGateSmoke' -Arguments @('-NoLogo', '-NoProfile', '-File', $batchGateFile)
 
-    $redirectedNoExitCommand = '$ErrorActionPreference = ''Stop''; $WarningPreference = ''Stop''; . $env:PWSH_PROFILE_SOURCE; if ($script:__PwshProfileIsInteractive -or (Test-Path function:\Get-PwshTabCompletionAction) -or (Test-Path function:\__PwshZshDefaultTabExpansion2)) { throw ''redirected NoExit session loaded interactive profile parts'' }; exit 0'
+    $redirectedNoExitCommand = '$ErrorActionPreference = ''Stop''; $WarningPreference = ''Stop''; . $env:PWSH_PROFILE_SOURCE; if ($script:__PwshProfileIsInteractive -or (Test-Path function:\Invoke-PwshCompletionAction) -or (Test-Path function:\__PwshZshDefaultTabExpansion2)) { throw ''redirected NoExit session loaded interactive profile parts'' }; exit 0'
     Invoke-PwshChecked -Name 'RedirectedNoExitGateSmoke' `
         -Arguments @('-NoLogo', '-NoProfile', '-NoExit', '-Command', $redirectedNoExitCommand)
 
@@ -551,6 +583,9 @@ if (-not $script:__PwshAcceptLine -or
     $script:__PwshAcceptLine.Ast.Extent.Text -notmatch '(?s)try\s*\{.*Update-LeanPromptAcceptedLineState.*\}\s*catch\s*\{\s*\}\s*finally\s*\{.*AcceptLine') {
     throw 'Enter handler does not guarantee AcceptLine after prompt tracking'
 }
+if ($script:__PwshAcceptLine.Ast.Extent.Text -notmatch '\$script:__LeanPromptStatusOverride\s*=\s*\$null') {
+    throw 'Enter handler does not clear the interrupted prompt state'
+}
 
 if (-not $script:__PwshZshPathCompletionEnabled) { throw 'zsh-style path completion was not enabled' }
 foreach ($selfInsertKey in '/', '\', 'Spacebar', ';', '&', '|') {
@@ -560,11 +595,13 @@ foreach ($selfInsertKey in '/', '\', 'Spacebar', ';', '&', '|') {
 $enterHandler = Get-PSReadLineKeyHandler -Bound | Where-Object Key -CEQ 'Enter'
 Assert-Equal $enterHandler.Function 'ZshAcceptLine' 'enter key handler'
 $tabHandler = Get-PSReadLineKeyHandler -Bound | Where-Object Key -CEQ 'Tab'
-Assert-Equal $tabHandler.Function 'ZshTwoStageTabComplete' 'tab key handler'
+Assert-Equal $tabHandler.Function 'ZshMenuComplete' 'tab key handler'
 $shiftTabHandler = Get-PSReadLineKeyHandler -Bound | Where-Object Key -CEQ 'Shift+Tab'
 Assert-Equal $shiftTabHandler.Function 'ZshMenuCompleteBackward' 'shift+tab key handler'
 $ctrlCHandler = Get-PSReadLineKeyHandler -Bound | Where-Object Key -CEQ 'Ctrl+c'
 Assert-Equal $ctrlCHandler.Function 'PwshCompletionAwareCtrlC' 'ctrl+c key handler'
+$ctrlWHandler = Get-PSReadLineKeyHandler -Bound | Where-Object Key -CEQ 'Ctrl+w'
+Assert-Equal $ctrlWHandler.Function 'BackwardKillWord' 'ctrl+w key handler'
 Assert-Equal (Get-PwshCtrlCAction -CompletionActive $false -CompletionInterrupted $false) 'CancelLine' 'ordinary ctrl+c action'
 Assert-Equal (Get-PwshCtrlCAction -CompletionActive $true -CompletionInterrupted $false) 'Abort' 'active completion ctrl+c action'
 Assert-Equal (Get-PwshCtrlCAction -CompletionActive $false -CompletionInterrupted $true) 'Consume' 'pending completion interrupt ctrl+c action'
@@ -594,20 +631,25 @@ if ($interruptDefinition.IndexOf('[Console]::KeyAvailable') -gt $interruptDefini
 }
 $completionActionDefinition = (Get-Command Invoke-PwshCompletionAction).Definition
 $enableCtrlCInput = $completionActionDefinition.IndexOf('[Console]::TreatControlCAsInput = $true')
-$completionDispatch = $completionActionDefinition.IndexOf("if (`$Action -eq 'MenuComplete')")
+$completionDispatch = $completionActionDefinition.IndexOf('[Microsoft.PowerShell.PSConsoleReadLine]::MenuComplete($Key, $Arg)')
 $deferredCtrlCCheck = $completionActionDefinition.IndexOf('(Test-PwshQueuedCtrlC)')
 $restoreCtrlCInput = $completionActionDefinition.IndexOf('[Console]::TreatControlCAsInput = $previousTreatControlCAsInput')
 if ($enableCtrlCInput -lt 0 -or $enableCtrlCInput -gt $completionDispatch -or $restoreCtrlCInput -lt $completionDispatch) {
-    throw 'Ctrl+C input mode does not cover both Complete and MenuComplete'
+    throw 'Ctrl+C input mode does not cover MenuComplete'
 }
 if ($deferredCtrlCCheck -lt $completionDispatch -or $deferredCtrlCCheck -gt $restoreCtrlCInput) {
     throw 'deferred menu Ctrl+C is not detected inside the completion transaction'
 }
-
-Assert-Equal (Get-PwshTabCompletionAction -Line 'git ch' -Cursor 6 -LastLine 'git ch' -LastCursor 6) 'MenuComplete' 'two-stage repeated tab'
-Assert-Equal (Get-PwshTabCompletionAction -Line 'git ch' -Cursor 6 -LastLine $null -LastCursor $null) 'Complete' 'two-stage first tab'
-Assert-Equal (Get-PwshTabCompletionAction -Line 'git che' -Cursor 7 -LastLine 'git ch' -LastCursor 6) 'Complete' 'two-stage edited line'
-Assert-Equal (Get-PwshTabCompletionAction -Line 'git ch' -Cursor 3 -LastLine 'git ch' -LastCursor 6) 'Complete' 'two-stage moved cursor'
+$promptFailureState = $completionActionDefinition.IndexOf('$script:__LeanPromptStatusOverride = $false')
+$promptRedraw = $completionActionDefinition.IndexOf('[Microsoft.PowerShell.PSConsoleReadLine]::InvokePrompt()')
+if ($promptFailureState -lt $restoreCtrlCInput -or $promptRedraw -lt $promptFailureState) {
+    throw 'completion Ctrl+C does not redraw the prompt with failed status'
+}
+$ctrlCHandlerDefinition = $script:__PwshCtrlCHandler.ToString()
+if ($ctrlCHandlerDefinition.IndexOf('$script:__LeanPromptStatusOverride = $false') -lt 0 -or
+    $ctrlCHandlerDefinition.IndexOf('[Microsoft.PowerShell.PSConsoleReadLine]::CancelLine') -lt 0) {
+    throw 'ordinary Ctrl+C does not mark the prompt as failed'
+}
 
 if (-not (Test-PwshCommandPositionWord -InputScript 'ge' -WordStart 0)) { throw 'first word was not treated as command position' }
 if (Test-PwshCommandPositionWord -InputScript 'git ch' -WordStart 4) { throw 'argument word was treated as command position' }
@@ -732,6 +774,11 @@ New-Item -ItemType Directory -Force -Path (Join-Path $root 'AlphaUpper\nested') 
 New-Item -ItemType Directory -Force -Path (Join-Path $root 'alphaLower\nested') | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $root '.hiddenDir\nested') | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $root 'Space Dir\nested') | Out-Null
+$hiddenWindowsPath = Join-Path $root 'HiddenWindows'
+New-Item -ItemType Directory -Force -Path $hiddenWindowsPath | Out-Null
+[System.IO.File]::SetAttributes($hiddenWindowsPath,
+    [System.IO.File]::GetAttributes($hiddenWindowsPath) -bor
+    [System.IO.FileAttributes]::Hidden -bor [System.IO.FileAttributes]::System)
 Set-Content -LiteralPath (Join-Path $root 'my-file.txt') -Value 'flex completion smoke'
 Set-Location $root
 
@@ -830,6 +877,7 @@ function global:__PwshZshDefaultTabExpansion2 {
     & $script:__PwshTestDefaultCompletion @PSBoundParameters
 }
 $null = Assert-Completion 'cd Projects' 'Projects/' 'Projects/' ProviderContainer
+Assert-Includes 'cd ' 'Projects/'
 Assert-NoCompletion 'cd DoesNotExist'
 if ($script:__PwshTestDefaultCompletionCalls -ne 0 -or
     $script:__PwshCarapaceInitializationState -cne 'NotStarted') {
@@ -890,6 +938,8 @@ $null = Assert-Completion 'cd alphau' 'AlphaUpper/' 'AlphaUpper/' ProviderContai
 $null = Assert-Completion 'cd ALPHAL' 'alphaLower/' 'alphaLower/' ProviderContainer
 Assert-CompletionSet 'cd alpha' @('AlphaUpper/', 'alphaLower/')
 $null = Assert-Completion 'cd .H' '.hiddenDir/' '.hiddenDir/' ProviderContainer
+Assert-Excludes 'cd ' 'HiddenWindows/'
+Assert-Includes 'cd HiddenW' 'HiddenWindows/'
 $quoteContext = Get-PwshFileSystemCompletionContext -InputScript 'cd "Space D' -CursorColumn 11
 if ($quoteContext.Backend -cne 'Default') { throw 'unclosed quote did not select the default backend' }
 Assert-Excludes 'cd ./' './.hiddenDir/'
@@ -1431,6 +1481,11 @@ if ($warm -notmatch 'git main' -or $warm -notmatch '\+7' -or $script:__GitPrompt
 }
 
 $gitExe = @(Get-Command git -CommandType Application -ErrorAction Stop)[0].Source
+$global:LASTEXITCODE = 67
+$nativeBranch = Get-LeanPromptGitBranch -Path $repo
+if ($nativeBranch -cne 'main' -or $global:LASTEXITCODE -ne 67) {
+    throw "native attached branch probe was affected by the previous exit code: branch=[$nativeBranch] exit=$global:LASTEXITCODE"
+}
 $script:__LeanPromptGitBranchRefreshPending = $false
 if (-not (Update-LeanPromptAcceptedLineState -Line 'git switch --quiet -c prompt-feature') -or
     -not $script:__LeanPromptGitBranchRefreshPending) {
@@ -1459,7 +1514,7 @@ $immediatePlain = Remove-LeanPromptAnsi $immediate
 if ($immediatePlain -notmatch 'git prompt-feature' -or $immediatePlain -match 'git main|\+7') {
     throw "switched branch prompt reused stale cache: [$immediatePlain]"
 }
-if ($script:__GitPromptCalls.Count -ne 1 -or $script:__GitPromptCalls[0] -notmatch 'symbolic-ref --quiet --short HEAD') {
+if ($script:__GitPromptCalls.Count -ne 1 -or $script:__GitPromptCalls[0] -notmatch 'rev-parse --abbrev-ref HEAD') {
     throw "attached branch prompt used unexpected Git plumbing: [$($script:__GitPromptCalls -join '; ')]"
 }
 if ($script:__GitPromptRefreshes -ne 1 -or -not $script:__LeanPromptGitBranchOverride -or
@@ -1496,7 +1551,7 @@ if ($detachedPlain -notmatch "git $([regex]::Escape($shortHead))" -or $detachedP
     throw "detached HEAD prompt is invalid: [$detachedPlain]"
 }
 if ($script:__GitPromptCalls.Count -ne 3 -or
-    $script:__GitPromptCalls[1] -notmatch 'symbolic-ref --quiet --short HEAD' -or
+    $script:__GitPromptCalls[1] -notmatch 'rev-parse --abbrev-ref HEAD' -or
     $script:__GitPromptCalls[2] -notmatch 'rev-parse --short HEAD') {
     throw "detached branch prompt used unexpected Git plumbing: [$($script:__GitPromptCalls -join '; ')]"
 }
@@ -1511,8 +1566,31 @@ $externalPlain = Remove-LeanPromptAnsi $external
 if ($externalPlain -notmatch 'git prompt-external' -or $externalPlain -notmatch '\+4' -or $script:__LeanPromptGitBranchOverride) {
     throw "new async cache did not converge an older branch override: [$externalPlain]"
 }
-if ($script:__GitPromptCalls.Count -ne 4 -or $script:__GitPromptCalls[3] -notmatch 'symbolic-ref --quiet --short HEAD') {
+if ($script:__GitPromptCalls.Count -ne 4 -or $script:__GitPromptCalls[3] -notmatch 'rev-parse --abbrev-ref HEAD') {
     throw "external branch convergence used unexpected Git plumbing: [$($script:__GitPromptCalls -join '; ')]"
+}
+
+$nonRepo = Join-Path $cacheDir 'not-a-repository'
+New-Item -ItemType Directory -Force -Path $nonRepo | Out-Null
+$callsBefore = $script:__GitPromptCalls.Count
+$global:LASTEXITCODE = 113
+$nonRepoBranch = Get-LeanPromptGitBranch -Path $nonRepo
+$nonRepoCalls = @($script:__GitPromptCalls | Select-Object -Skip $callsBefore)
+if ($nonRepoBranch -or $global:LASTEXITCODE -ne 113 -or $nonRepoCalls.Count -ne 1 -or
+    $nonRepoCalls[0] -notmatch 'rev-parse --abbrev-ref HEAD') {
+    throw "non-repository branch probe was not a single plumbing call: branch=[$nonRepoBranch] exit=$global:LASTEXITCODE calls=[$($nonRepoCalls -join '; ')]"
+}
+
+& $gitExe -C $repo switch --quiet --orphan prompt-unborn *> $null
+if ($global:LASTEXITCODE -ne 0) { throw 'failed to create unborn Git prompt branch' }
+$callsBefore = $script:__GitPromptCalls.Count
+$global:LASTEXITCODE = 127
+$unbornBranch = Get-LeanPromptGitBranch -Path $repo
+$unbornCalls = @($script:__GitPromptCalls | Select-Object -Skip $callsBefore)
+if ($unbornBranch -cne 'prompt-unborn' -or $global:LASTEXITCODE -ne 127 -or $unbornCalls.Count -ne 2 -or
+    $unbornCalls[0] -notmatch 'rev-parse --abbrev-ref HEAD' -or
+    $unbornCalls[1] -notmatch 'symbolic-ref --quiet --short HEAD') {
+    throw "unborn branch probe contract is invalid: branch=[$unbornBranch] exit=$global:LASTEXITCODE calls=[$($unbornCalls -join '; ')]"
 }
 exit 0
 '@

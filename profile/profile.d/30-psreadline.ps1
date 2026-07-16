@@ -65,6 +65,7 @@ $script:__PwshCtrlCHandler = {
         return
     }
 
+    $script:__LeanPromptStatusOverride = $false
     [Microsoft.PowerShell.PSConsoleReadLine]::CancelLine($key, $arg)
 }
 Set-PSReadLineKeyHandler -Key Ctrl+c `
@@ -82,26 +83,9 @@ if ($Host.Name -eq 'ConsoleHost' -and -not [Console]::IsOutputRedirected) {
 # Up/Down arrows: search history by current prefix (zsh history-substring-search feel)
 Set-PSReadLineKeyHandler -Key UpArrow   -Function HistorySearchBackward
 Set-PSReadLineKeyHandler -Key DownArrow -Function HistorySearchForward
-# Tab: zsh auto_menu feel -- the first Tab completes the longest common prefix (keep typing to
-# narrow the candidates), a second Tab on an unchanged buffer opens the interactive menu.
+Set-PSReadLineKeyHandler -Key Ctrl+w    -Function BackwardKillWord
+# Tab opens the interactive candidate menu immediately.
 # Shift+Tab opens the menu directly (and moves backward once a menu is open).
-$script:__PwshTabLastLine = $null
-$script:__PwshTabLastCursor = $null
-function Get-PwshTabCompletionAction {
-    param(
-        [string] $Line,
-        [int] $Cursor,
-        [string] $LastLine,
-        [Nullable[int]] $LastCursor
-    )
-
-    # Same buffer state as right after the previous Tab press: escalate to the menu.
-    # A buffer edited back to an identical state also lands here; the menu is harmless there.
-    if ($null -ne $LastCursor -and $Cursor -eq $LastCursor -and $Line -ceq $LastLine) {
-        return 'MenuComplete'
-    }
-    'Complete'
-}
 function Get-PwshBufferState {
     $line = $null
     $cursor = $null
@@ -161,7 +145,6 @@ function Invoke-PwshWithDirectorySeparator {
 }
 function Invoke-PwshCompletionAction {
     param(
-        [ValidateSet('Complete', 'MenuComplete')][string] $Action,
         $Key,
         $Arg
     )
@@ -174,19 +157,14 @@ function Invoke-PwshCompletionAction {
     $interrupted = $false
     try {
         # Keep Ctrl+C in PSReadLine's input stream for the whole completion transaction. If it
-        # becomes a console control event during Complete, PowerShell cancels the entire line.
+        # becomes a console control event during completion, PowerShell cancels the entire line.
         [Console]::TreatControlCAsInput = $true
         Invoke-PwshWithDirectorySeparator {
-            if ($Action -eq 'MenuComplete') {
-                [Microsoft.PowerShell.PSConsoleReadLine]::MenuComplete($Key, $Arg)
-            }
-            else {
-                [Microsoft.PowerShell.PSConsoleReadLine]::Complete($Key, $Arg)
-            }
+            [Microsoft.PowerShell.PSConsoleReadLine]::MenuComplete($Key, $Arg)
         }
         # MenuComplete handles Ctrl+C as an ordinary chord and prepends it for the outer input
         # loop. Mark it before leaving this transaction so the snapshot is restored first.
-        if ($Action -eq 'MenuComplete' -and (Test-PwshQueuedCtrlC)) {
+        if (Test-PwshQueuedCtrlC) {
             $script:__PwshCompletionInterruptState.CtrlC = $true
         }
     }
@@ -202,44 +180,30 @@ function Invoke-PwshCompletionAction {
             $script:__PwshCompletionInterruptState.CtrlC = $false
         }
     }
-    if (-not $interrupted) {
+    if ($interrupted) {
+        $script:__LeanPromptStatusOverride = $false
+        try { [Microsoft.PowerShell.PSConsoleReadLine]::InvokePrompt() } catch {}
+    }
+    else {
         Set-PwshAutoSlashState -Before $before -After (Get-PwshBufferState)
     }
     -not $interrupted
 }
 if ($script:__PwshZshPathCompletionEnabled) {
 Set-PSReadLineKeyHandler -Key Tab `
-    -BriefDescription ZshTwoStageTabComplete `
-    -Description 'Complete the longest common prefix first; open menu completion on a repeated Tab.' `
+    -BriefDescription ZshMenuComplete `
+    -Description 'Open menu completion immediately.' `
     -ScriptBlock {
         param($key, $arg)
 
-        $line = $null
-        $cursor = $null
-        [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$line, [ref]$cursor)
-        $action = Get-PwshTabCompletionAction -Line $line -Cursor $cursor `
-            -LastLine $script:__PwshTabLastLine -LastCursor $script:__PwshTabLastCursor
-        if ($action -eq 'MenuComplete') {
-            $completed = Invoke-PwshCompletionAction -Action MenuComplete -Key $key -Arg $arg
-        }
-        else {
-            $completed = Invoke-PwshCompletionAction -Action Complete -Key $key -Arg $arg
-        }
-        if (-not $completed) {
-            $script:__PwshTabLastLine = $null
-            $script:__PwshTabLastCursor = $null
-            return
-        }
-        [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$line, [ref]$cursor)
-        $script:__PwshTabLastLine = $line
-        $script:__PwshTabLastCursor = $cursor
+        $null = Invoke-PwshCompletionAction -Key $key -Arg $arg
     }
 Set-PSReadLineKeyHandler -Key Shift+Tab `
     -BriefDescription ZshMenuCompleteBackward `
     -Description 'Open menu completion; move backward when the menu is already open.' `
     -ScriptBlock {
         param($key, $arg)
-        $null = Invoke-PwshCompletionAction -Action MenuComplete -Key $key -Arg $arg
+        $null = Invoke-PwshCompletionAction -Key $key -Arg $arg
     }
 
 # Zsh AUTO_REMOVE_SLASH: a separator added by directory completion is replaceable. A slash
@@ -306,6 +270,7 @@ function Update-LeanPromptAcceptedLineState {
 
 $script:__PwshAcceptLine = {
     param($key, $arg)
+    $script:__LeanPromptStatusOverride = $null
     Remove-PwshAutoSlash
     try {
         $buffer = Get-PwshBufferState

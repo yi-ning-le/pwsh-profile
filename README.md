@@ -8,11 +8,11 @@ This repo keeps the profile portable without hiding missing dependencies. Modern
 
 - Two-line p10k classic-inspired prompt with gray Powerline segments.
 - Smart path shortening with project-root awareness.
-- Git prompt with a synchronous branch refresh after interactive Git commands plus async dirty state, stash, conflict, and merge/rebase/cherry-pick/revert state.
-- Git status probing remains asynchronous; the first prompt in a directory may redraw once its cache is ready.
+- Git prompt with a synchronous branch refresh after directory changes and branch-changing interactive Git commands, plus async dirty state, stash, conflict, and merge/rebase/cherry-pick/revert state.
+- Git dirty-state probing remains asynchronous; the branch name appears immediately, while the status segment may redraw once its cache is ready.
 - Git branch detection uses Git plumbing, so both files and reftable ref backends work.
 - Right-aligned toolchain versions and command duration when the terminal is wide enough.
-- PSReadLine history suggestions, prefix history search, and zsh-style two-stage Tab completion (prefix first, menu on repeat) for interactive sessions.
+- PSReadLine history suggestions, prefix history search, and menu completion on the first Tab for interactive sessions.
 - Zsh-style path completion: `/` only inserts a separator, Tab performs case-insensitive segment-prefix completion, directories end in `/`, and hidden entries require an explicit `.` prefix.
 - Carapace external command completion, prewarmed on the first interactive idle, plus status-aware git path completion.
 - `fnm` Node.js auto-switching with asynchronous interactive prewarming and on-demand fallback for `node`, `npm`, `npx`, `pnpm`, `yarn`, and `corepack`.
@@ -108,10 +108,11 @@ Interactive ConsoleHost sessions load PSReadLine with:
 - Emacs edit mode.
 - Inline history/plugin predictions.
 - `UpArrow` / `DownArrow` prefix history search.
-- `Tab` two-stage completion (zsh `auto_menu` style): the first press completes the longest common prefix so typing can keep narrowing candidates; a second press on an unchanged line opens menu completion.
+- `Tab` opening menu completion immediately.
 - `Shift+Tab` opening menu completion directly (and moving backward inside an open menu).
-- `Ctrl+C` during completion restoring the command line to its state before Tab; inside the menu it exits the menu without clearing the line.
-- `Ctrl+C` outside completion retaining the normal behavior of clearing the current line and showing a new prompt.
+- `Ctrl+C` during completion restoring the command line to its state before Tab and redrawing the prompt arrow in red; `^C` output is left to PSReadLine's native behavior.
+- `Ctrl+C` outside completion clearing the current line and redrawing the prompt arrow in red.
+- `Ctrl+W` deleting backward by PSReadLine word boundaries (`BackwardKillWord`).
 - `Ctrl+RightArrow` accepting the next suggestion word.
 - Command duration tracking for the prompt.
 
@@ -119,10 +120,10 @@ Path completion follows the Zsh `compinit` interaction model with Windows-friend
 
 - The fast filesystem backend is selected from the current command AST, resolved aliases, and PowerShell parameter metadata rather than command-name special cases. Confirmed `Path`, `LiteralPath`, `Source`, `SourcePath`, `Destination`, and `DestinationPath` parameters share it; `Set-Location` and `Push-Location` path parameters are restricted to directories.
 - Native commands use the fast backend only for explicit local paths such as `./`, `../`, `~/`, drive-qualified paths, and rooted paths. Bare native arguments remain with Carapace or the command's default completer.
-- `/` is ordinary input and never starts completion; only Tab does. The first Tab completes a common prefix, while a repeated Tab opens the menu.
+- `/` is ordinary input and never starts completion; the first Tab opens the menu.
 - Matching follows a Windows-friendly Zsh `matcher-list` style: each path segment uses a case-insensitive prefix. Substring matching and `-`/`_` interchange are intentionally not applied.
 - Directories remain `ProviderContainer` candidates and end in `/`; file candidates advance with a trailing space. Quoted paths keep the suffix in the correct position.
-- Hidden entries appear only when the current segment starts with `.`, while unique intermediate segments continue to the next level and ambiguous segments stop at that level.
+- Dot-prefixed entries appear only when the current segment starts with `.`; Windows Hidden/System entries are omitted for an empty segment but remain available through an explicit prefix. Unique intermediate segments continue to the next level and ambiguous segments stop at that level.
 - The fast backend supports `~`, `.`, `..`, drive roots, and local rooted paths. UNC paths, non-filesystem providers, wildcards, quoting, and complex expressions fall back to native completion instead of being guessed.
 - Confirmed local filesystem results use their real on-disk case and are displayed with `/`; fallback completers retain their candidate set and command-specific filtering.
 - A `/` inserted by directory completion has Zsh `AUTO_REMOVE_SLASH` behavior before another separator, Space, Enter, and command separators. Manually typed `/` is never treated as automatic.

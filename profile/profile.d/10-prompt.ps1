@@ -10,6 +10,7 @@ $script:__LeanPromptProjectRootCache = @{}
 $script:__LeanPromptProjectRootCacheTtlSeconds = 60
 $script:__LeanPromptCommandStartUtc = $null
 $script:__LeanPromptDurationEnabled = $false
+$script:__LeanPromptStatusOverride = $null
 $script:__LeanPromptRightMinWidth = 50
 $script:__LeanPromptRightGapCells = 2
 $script:__LeanPromptAsyncGitRedrawDebounceMs = 250
@@ -446,6 +447,7 @@ $script:__AsyncGitStatusMemoryCachePath = $null
 $script:__AsyncGitStatusMemoryLastWriteTimeUtc = [datetime]::MinValue
 $script:__AsyncGitStatusMemoryExpiresUtc = [datetime]::MinValue
 $script:__AsyncGitStatusMemoryText = ''
+$script:__LeanPromptGitLastPath = $null
 $script:__LeanPromptGitBranchRefreshPending = $false
 $script:__LeanPromptGitBranchOverride = $null
 $script:__LeanPromptAsyncGitRedrawCachePath = ''
@@ -532,12 +534,16 @@ function global:Get-LeanPromptGitBranch {
     $lastExitCode = $global:LASTEXITCODE
     $PSNativeCommandUseErrorActionPreference = $false
     try {
-        $branch = (& git -C $Path symbolic-ref --quiet --short HEAD 2>$null | Select-Object -First 1)
-        if ($global:LASTEXITCODE -ne 0 -or -not $branch) {
-            $branch = (& git -C $Path rev-parse --short HEAD 2>$null | Select-Object -First 1)
-        }
-        if ($global:LASTEXITCODE -ne 0 -or -not $branch) { return '' }
-        ([string]$branch).Trim()
+        $probe = @(& git -C $Path rev-parse --abbrev-ref HEAD 2>$null)
+        $probeExitCode = $global:LASTEXITCODE
+        $head = if ($probe.Count) { ([string]$probe[0]).Trim() } else { '' }
+        if ($head -cne 'HEAD') { return $head }
+
+        $fallback = if ($probeExitCode -eq 0) { @('rev-parse', '--short', 'HEAD') }
+            else { @('symbolic-ref', '--quiet', '--short', 'HEAD') }
+        $resolved = @(& git -C $Path @fallback 2>$null)
+        if ($global:LASTEXITCODE -ne 0 -or -not $resolved.Count) { return '' }
+        ([string]$resolved[0]).Trim()
     }
     finally {
         $global:LASTEXITCODE = $lastExitCode
@@ -712,8 +718,11 @@ function global:Get-AsyncGitStatusText {
     $lockPath = Join-Path $script:__AsyncGitStatusCacheDir "$key.lock"
     $script:__LeanPromptAsyncGitRedrawCachePath = $cachePath
     $forceRefresh = $false
+    $pathChanged = $script:__LeanPromptGitLastPath -and
+        -not $script:__LeanPromptGitLastPath.Equals($cwd, [System.StringComparison]::OrdinalIgnoreCase)
+    $script:__LeanPromptGitLastPath = $cwd
 
-    if ($script:__LeanPromptGitBranchRefreshPending) {
+    if ($script:__LeanPromptGitBranchRefreshPending -or $pathChanged) {
         $script:__LeanPromptGitBranchRefreshPending = $false
         $forceRefresh = $true
         $cacheItem = Get-Item -LiteralPath $cachePath -ErrorAction SilentlyContinue
@@ -794,7 +803,10 @@ function global:Get-AsyncToolchainStatusText {
         -Refresh { param($cwd, $cachePath, $lockPath) Start-AsyncToolchainStatusRefresh -Path $cwd -CachePath $cachePath -LockPath $lockPath }
 }
 function global:prompt {
-    $lastCommandSucceeded = $?
+    $pipelineSucceeded = $?
+    $lastCommandSucceeded = if ($null -ne $script:__LeanPromptStatusOverride) {
+        [bool]$script:__LeanPromptStatusOverride
+    } else { $pipelineSucceeded }
     $lastExitCode = $global:LASTEXITCODE
     if (Test-Path function:\Update-FnmEnvironmentForPrompt) { Update-FnmEnvironmentForPrompt }
     $palette = $script:LeanPromptPalette
