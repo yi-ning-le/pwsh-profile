@@ -4,6 +4,8 @@ A fast personal PowerShell profile for Windows / PowerShell 7.
 
 This repo keeps the profile portable without hiding missing dependencies. Modern CLI tools such as `lsd`, `bat`, and `rg` are explicit requirements; if they are not installed, the related commands should fail visibly.
 
+See [Feature Reference](docs/FEATURES.md) for a detailed description of runtime behavior, key bindings, completion, background refresh, installation, and validation.
+
 ## What It Includes
 
 - Two-line p10k classic-inspired prompt with gray Powerline segments.
