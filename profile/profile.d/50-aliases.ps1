@@ -11,6 +11,9 @@ function ll { if ($args.Count) { lsd --icon always --group-dirs first -l @args }
 function la { if ($args.Count) { lsd --icon always --group-dirs first -la @args } else { lsd --icon always --group-dirs first -la . } }                  # Include hidden files
 function lt { if ($args.Count) { lsd --icon always --group-dirs first --tree --depth 2 @args } else { lsd --icon always --group-dirs first --tree --depth 2 . } } # Two-level tree
 # ---- Directory navigation ----
+if (Test-Path Alias:pwd) { Remove-Item Alias:pwd -Force }
+function pwd { (Get-Location).Path.Replace('\', '/') }
+function mkdir { New-Item -ItemType Directory -Path $args | Out-Null }
 function .. { Set-Location .. }
 function ... { Set-Location ../.. }
 function .... { Set-Location ../../.. }
