@@ -648,6 +648,7 @@ function Get-PwshZshPathCompletion {
     }
     if (-not $baseDir -or -not [System.IO.Directory]::Exists($baseDir)) { return $emptyCompletion }
 
+    $hiddenAttributes = [System.IO.FileAttributes]::Hidden -bor [System.IO.FileAttributes]::System
     $lastIndex = $segments.Count - 1
     $resolvedIntermediateSegment = $false
     for ($i = $segmentIndex; $i -lt $lastIndex; $i++) {
@@ -663,6 +664,8 @@ function Get-PwshZshPathCompletion {
         if (Test-PwshCompletionInterrupted) { return $emptyCompletion }
         $matched = @(& $enumerateFileSystemItems $baseDir $true |
             Where-Object {
+                (-not ($_.Attributes -band $hiddenAttributes) -or
+                    ($segment.StartsWith('.') -and $_.Name.StartsWith('.'))) -and
                 (-not $_.Name.StartsWith('.') -or $segment.StartsWith('.')) -and
                 $_.Name.StartsWith($segment, [System.StringComparison]::OrdinalIgnoreCase)
             } | Sort-Object Name)
@@ -687,12 +690,12 @@ function Get-PwshZshPathCompletion {
     }
 
     $leaf = $segments[$lastIndex]
-    $hiddenAttributes = [System.IO.FileAttributes]::Hidden -bor [System.IO.FileAttributes]::System
     $completionMatches = [System.Collections.ObjectModel.Collection[System.Management.Automation.CompletionResult]]::new()
     if (Test-PwshCompletionInterrupted) { return $emptyCompletion }
     $children = @(& $enumerateFileSystemItems $baseDir ([bool]$DirectoriesOnly) |
         Where-Object {
-            (-not ($_.Attributes -band $hiddenAttributes) -or $leaf.Length -gt 0) -and
+            (-not ($_.Attributes -band $hiddenAttributes) -or
+                ($leaf.StartsWith('.') -and $_.Name.StartsWith('.'))) -and
             (-not $_.Name.StartsWith('.') -or $leaf.StartsWith('.')) -and
             $_.Name.StartsWith($leaf, [System.StringComparison]::OrdinalIgnoreCase)
         } | Sort-Object -Property @{ Expression = { $_ -is [System.IO.DirectoryInfo] }; Descending = $true }, Name)

@@ -33,11 +33,11 @@ $script:__PwshZshPathCompletionEnabled = & {
         $false
     }
 }
-Enable-LeanPromptAsyncRedraw
 Set-PSReadLineOption -HistoryNoDuplicates
 Set-PSReadLineOption -HistorySearchCursorMovesToEnd
 Set-PSReadLineOption -EditMode Emacs                      # Emacs keybindings (change to Vi for vi mode)
 Set-PSReadLineOption -BellStyle None
+Set-PSReadLineOption -ExtraPromptLineCount 1
 $script:__PwshCompletionActionState = $null
 function Get-PwshCtrlCAction {
     param(
@@ -257,9 +257,12 @@ function Update-LeanPromptAcceptedLineState {
     $errors = $null
     $ast = [System.Management.Automation.Language.Parser]::ParseInput($Line, [ref]$tokens, [ref]$errors)
     if ($errors | Where-Object IncompleteInput | Select-Object -First 1) { return $false }
+    $commands = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] }, $true))
+    if ($commands.Count -eq 0) { return $true }
 
     $script:__LeanPromptCommandStartUtc = [datetime]::UtcNow
-    foreach ($commandAst in $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] }, $true)) {
+    $script:__LeanPromptGitGeneration = [long]$script:__LeanPromptGitGeneration + 1
+    foreach ($commandAst in $commands) {
         if (Test-LeanPromptGitBranchRefreshCommand -CommandAst $commandAst) {
             $script:__LeanPromptGitBranchRefreshPending = $true
             break

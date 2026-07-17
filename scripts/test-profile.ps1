@@ -362,37 +362,6 @@ finally {
     Remove-Item -LiteralPath $lockTestRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-$watcherTestRoot = Join-Path ([System.IO.Path]::GetTempPath()) "lean-prompt-watcher-$PID"
-$watcherJobIds = @()
-try {
-    New-Item -ItemType Directory -Force -Path $watcherTestRoot | Out-Null
-    $script:__LeanPromptAsyncGitRedrawWatcher = [System.IO.FileSystemWatcher]::new($watcherTestRoot, '*.json')
-    foreach ($eventName in 'Created', 'Changed', 'Renamed') {
-        $job = Register-ObjectEvent -InputObject $script:__LeanPromptAsyncGitRedrawWatcher -EventName $eventName `
-            -SourceIdentifier "$($script:__LeanPromptAsyncGitRedrawSourceId).$eventName" -Action {}
-        $watcherJobIds += $job.Id
-    }
-
-    Disable-LeanPromptAsyncRedraw
-    Disable-LeanPromptAsyncRedraw
-    $remainingSubscribers = @(Get-EventSubscriber -ErrorAction SilentlyContinue | Where-Object {
-        $_.SourceIdentifier.StartsWith("$($script:__LeanPromptAsyncGitRedrawSourceId).", [System.StringComparison]::Ordinal)
-    })
-    $remainingJobs = @(Get-Job -Id $watcherJobIds -ErrorAction SilentlyContinue)
-    if ($remainingSubscribers.Count -or $remainingJobs.Count -or $script:__LeanPromptAsyncGitRedrawWatcher) {
-        throw 'async redraw cleanup left subscriptions, jobs, or watcher state behind'
-    }
-}
-finally {
-    Get-EventSubscriber -ErrorAction SilentlyContinue | Where-Object {
-        $_.SourceIdentifier.StartsWith("$($script:__LeanPromptAsyncGitRedrawSourceId).", [System.StringComparison]::Ordinal)
-    } | ForEach-Object { Unregister-Event -SubscriptionId $_.SubscriptionId -ErrorAction SilentlyContinue }
-    if ($watcherJobIds.Count) { Remove-Job -Id $watcherJobIds -Force -ErrorAction SilentlyContinue }
-    if ($script:__LeanPromptAsyncGitRedrawWatcher) { $script:__LeanPromptAsyncGitRedrawWatcher.Dispose() }
-    $script:__LeanPromptAsyncGitRedrawWatcher = $null
-    Remove-Item -LiteralPath $watcherTestRoot -Recurse -Force -ErrorAction SilentlyContinue
-}
-
 function global:git { throw 'prompt made a synchronous git call' }
 function global:Start-AsyncGitStatusRefresh { param($Path, $CachePath, $LockPath) }
 $script:__AsyncGitStatusCacheDir = Join-Path $env:LOCALAPPDATA 'NoSyncGit'
@@ -465,6 +434,20 @@ try {
     Microsoft.PowerShell.Management\Remove-Item -LiteralPath $cacheFile -Force
     Assert-Equal (Get-AsyncCachedStatusText -Kind Git -CacheDir $memoryCacheRoot -TtlSeconds 30 -Formatter $formatter -Refresh $refresh) '' 'async missing cache read'
     Assert-Equal $script:__AsyncGitStatusMemoryText '' 'async missing cache memory clear'
+
+    @{ Path = $memoryCacheRoot; Value = 'negative'; IsRepo = $false } | ConvertTo-Json -Compress |
+        Microsoft.PowerShell.Management\Set-Content -LiteralPath $cacheFile
+    (Microsoft.PowerShell.Management\Get-Item -LiteralPath $cacheFile).LastWriteTimeUtc = [datetime]::UtcNow
+    $script:__NegativeRefreshCount = 0
+    $negativeRefresh = { param($cwd, $cachePath, $lockPath) $script:__NegativeRefreshCount++ }
+    Assert-Equal (Get-AsyncCachedStatusText -Kind Git -CacheDir $memoryCacheRoot -TtlSeconds 0 `
+        -NegativeTtlSeconds 5 -NegativeProperty IsRepo -Formatter $formatter -Refresh $negativeRefresh) `
+        'negative' 'async negative cache read'
+    Assert-Equal $script:__NegativeRefreshCount 0 'fresh negative cache refresh count'
+    (Microsoft.PowerShell.Management\Get-Item -LiteralPath $cacheFile).LastWriteTimeUtc = [datetime]::UtcNow.AddSeconds(-6)
+    $null = Get-AsyncCachedStatusText -Kind Git -CacheDir $memoryCacheRoot -TtlSeconds 0 `
+        -NegativeTtlSeconds 5 -NegativeProperty IsRepo -Formatter $formatter -Refresh $negativeRefresh
+    Assert-Equal $script:__NegativeRefreshCount 1 'expired negative cache refresh count'
     Remove-Item function:\Get-Content, function:\ConvertFrom-Json -Force
 }
 finally {
@@ -534,6 +517,7 @@ function Get-TestCommandAst([string]$Line) {
     @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] }, $true))[0]
 }
 
+Assert-Equal (Get-PSReadLineOption).ExtraPromptLineCount 1 'multiline prompt line count'
 if ((Get-PSReadLineOption).CommandValidationHandler) { throw 'dead PSReadLine command validation handler is still installed' }
 foreach ($line in @(
         'git switch feature',
@@ -560,15 +544,28 @@ foreach ($line in 'git status', 'git log', 'git add .', 'git commit', 'gst', 'gs
 
 $script:__LeanPromptCommandStartUtc = $null
 $script:__LeanPromptGitBranchRefreshPending = $false
+$generationBeforeAcceptedLine = $script:__LeanPromptGitGeneration
 if (-not (Update-LeanPromptAcceptedLineState -Line 'Write-Host ok') -or -not $script:__LeanPromptCommandStartUtc) {
     throw 'accepted command did not record its start time'
 }
 if ($script:__LeanPromptGitBranchRefreshPending) { throw 'non-Git accepted command requested a branch refresh' }
+if ($script:__LeanPromptGitGeneration -ne $generationBeforeAcceptedLine + 1) {
+    throw 'accepted command did not invalidate the Git prompt generation'
+}
+
+$script:__LeanPromptCommandStartUtc = $null
+$generationBeforeEmptyLine = $script:__LeanPromptGitGeneration
+if (-not (Update-LeanPromptAcceptedLineState -Line '') -or $script:__LeanPromptCommandStartUtc -or
+    $script:__LeanPromptGitGeneration -ne $generationBeforeEmptyLine) {
+    throw 'empty accepted line changed prompt timing or Git generation'
+}
 
 $script:__LeanPromptCommandStartUtc = $null
 $script:__LeanPromptGitBranchRefreshPending = $false
+$generationBeforeIncompleteLine = $script:__LeanPromptGitGeneration
 if (Update-LeanPromptAcceptedLineState -Line "git switch 'feature") { throw 'incomplete command was accepted for prompt tracking' }
-if ($script:__LeanPromptCommandStartUtc -or $script:__LeanPromptGitBranchRefreshPending) {
+if ($script:__LeanPromptCommandStartUtc -or $script:__LeanPromptGitBranchRefreshPending -or
+    $script:__LeanPromptGitGeneration -ne $generationBeforeIncompleteLine) {
     throw 'incomplete command changed prompt tracking state'
 }
 
@@ -773,9 +770,15 @@ New-Item -ItemType Directory -Force -Path (Join-Path $root 'BranchTwo\leaf') | O
 New-Item -ItemType Directory -Force -Path (Join-Path $root 'AlphaUpper\nested') | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $root 'alphaLower\nested') | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $root '.hiddenDir\nested') | Out-Null
+$dotGitPath = Join-Path $root '.git'
+New-Item -ItemType Directory -Force -Path (Join-Path $dotGitPath 'nested') | Out-Null
+[System.IO.File]::SetAttributes($dotGitPath,
+    [System.IO.File]::GetAttributes($dotGitPath) -bor
+    [System.IO.FileAttributes]::Hidden -bor [System.IO.FileAttributes]::System)
 New-Item -ItemType Directory -Force -Path (Join-Path $root 'Space Dir\nested') | Out-Null
 $hiddenWindowsPath = Join-Path $root 'HiddenWindows'
 New-Item -ItemType Directory -Force -Path $hiddenWindowsPath | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $hiddenWindowsPath 'nested') | Out-Null
 [System.IO.File]::SetAttributes($hiddenWindowsPath,
     [System.IO.File]::GetAttributes($hiddenWindowsPath) -bor
     [System.IO.FileAttributes]::Hidden -bor [System.IO.FileAttributes]::System)
@@ -938,8 +941,12 @@ $null = Assert-Completion 'cd alphau' 'AlphaUpper/' 'AlphaUpper/' ProviderContai
 $null = Assert-Completion 'cd ALPHAL' 'alphaLower/' 'alphaLower/' ProviderContainer
 Assert-CompletionSet 'cd alpha' @('AlphaUpper/', 'alphaLower/')
 $null = Assert-Completion 'cd .H' '.hiddenDir/' '.hiddenDir/' ProviderContainer
+Assert-Excludes 'cd ' '.git/'
+$null = Assert-Completion 'cd .g' '.git/' '.git/' ProviderContainer
+$null = Assert-Completion 'cd .git/ne' '.git/nested/' '.git/nested/' ProviderContainer
 Assert-Excludes 'cd ' 'HiddenWindows/'
-Assert-Includes 'cd HiddenW' 'HiddenWindows/'
+Assert-Excludes 'cd HiddenW' 'HiddenWindows/'
+Assert-NoCompletion 'cd HiddenW/ne'
 $quoteContext = Get-PwshFileSystemCompletionContext -InputScript 'cd "Space D' -CursorColumn 11
 if ($quoteContext.Backend -cne 'Default') { throw 'unclosed quote did not select the default backend' }
 Assert-Excludes 'cd ./' './.hiddenDir/'
@@ -1437,6 +1444,95 @@ exit 0
     }
 
     $gitUpdater = Join-Path $profilePartsDir 'prompt-updaters\Update-AsyncGitStatus.ps1'
+    $gitUpdaterContractSmokeScript = @'
+$ErrorActionPreference = 'Stop'
+$root = $env:PWSH_GIT_UPDATER_CONTRACT_ROOT
+$cachePath = Join-Path $root 'status.json'
+$script:MockGitCalls = @()
+$script:MockAhead = 6
+$script:MockIsRepo = $true
+New-Item -ItemType Directory -Force -Path $root | Out-Null
+
+function global:git {
+    $script:MockGitCalls += ,@($args)
+    if ($args -contains 'status') {
+        if (-not $script:MockIsRepo) {
+            $global:LASTEXITCODE = 128
+            return
+        }
+        @(
+            '# branch.oid 0123456789abcdef0123456789abcdef01234567'
+            '# branch.head main'
+            '# branch.upstream origin/main'
+            "# branch.ab +$($script:MockAhead) -7"
+            '# stash 8'
+            '1 M. N... 100644 100644 100644 1111111 2222222 staged.txt'
+            '1 .M N... 100644 100644 100644 1111111 2222222 modified.txt'
+            '? untracked.txt'
+            '1 D. N... 100644 000000 000000 1111111 0000000 deleted.txt'
+            "2 R. N... 100644 100644 100644 1111111 2222222 R100 renamed.txt`told.txt"
+            'u UU N... 100644 100644 100644 100644 1111111 2222222 3333333 conflict.txt'
+        )
+        $global:LASTEXITCODE = 0
+        return
+    }
+    if ($args -contains 'rev-parse') {
+        1..5 | ForEach-Object { Join-Path $root "missing$_" }
+        $global:LASTEXITCODE = 0
+        return
+    }
+    $global:LASTEXITCODE = 1
+}
+
+. $env:PWSH_GIT_UPDATER -Cwd $root -CachePath $cachePath -LockPath (Join-Path $root 'status.lock') `
+    -SessionId contract -Generation 1
+$status = Get-Content -LiteralPath $cachePath -Raw | ConvertFrom-Json
+if ($status.Branch -cne 'main' -or $status.Ahead -ne 6 -or $status.Behind -ne 7 -or $status.Stash -ne 8 -or
+    $status.Staged -ne 2 -or $status.Modified -ne 1 -or $status.Untracked -ne 1 -or
+    $status.Deleted -ne 1 -or $status.Renamed -ne 1 -or $status.Conflict -ne 1) {
+    throw "porcelain v2 fixture was parsed incorrectly: $($status | ConvertTo-Json -Compress)"
+}
+$calls = @($script:MockGitCalls | ForEach-Object { $_ -join ' ' })
+if ($calls.Count -ne 2 -or
+    $calls[0] -notmatch 'status --porcelain=v2 --branch --show-stash --untracked-files=normal' -or
+    $calls[1] -notmatch 'rev-parse --git-path rebase-merge') {
+    throw "Git updater did not consolidate status plumbing: [$($calls -join '; ')]"
+}
+
+$firstWriteUtc = (Get-Item -LiteralPath $cachePath).LastWriteTimeUtc
+. $env:PWSH_GIT_UPDATER -Cwd $root -CachePath $cachePath -LockPath (Join-Path $root 'status.lock') `
+    -SessionId contract -Generation 2
+$unchanged = Get-Content -LiteralPath $cachePath -Raw | ConvertFrom-Json
+if ($unchanged.Generation -ne 1 -or (Get-Item -LiteralPath $cachePath).LastWriteTimeUtc -ne $firstWriteUtc) {
+    throw 'unchanged repository status rewrote the redraw cache'
+}
+
+$script:MockAhead = 9
+. $env:PWSH_GIT_UPDATER -Cwd $root -CachePath $cachePath -LockPath (Join-Path $root 'status.lock') `
+    -SessionId contract -Generation 3
+$changed = Get-Content -LiteralPath $cachePath -Raw | ConvertFrom-Json
+if ($changed.Generation -ne 3 -or $changed.Ahead -ne 9) {
+    throw 'changed repository status did not publish a new cache generation'
+}
+
+$script:MockIsRepo = $false
+$negativePath = Join-Path $root 'negative.json'
+. $env:PWSH_GIT_UPDATER -Cwd $root -CachePath $negativePath -LockPath (Join-Path $root 'negative.lock') `
+    -SessionId contract -Generation 4
+$negativeOldUtc = [datetime]::UtcNow.AddSeconds(-10)
+(Get-Item -LiteralPath $negativePath).LastWriteTimeUtc = $negativeOldUtc
+. $env:PWSH_GIT_UPDATER -Cwd $root -CachePath $negativePath -LockPath (Join-Path $root 'negative.lock') `
+    -SessionId contract -Generation 5
+$negative = Get-Content -LiteralPath $negativePath -Raw | ConvertFrom-Json
+if ($negative.Generation -ne 4 -or (Get-Item -LiteralPath $negativePath).LastWriteTimeUtc -le $negativeOldUtc) {
+    throw 'unchanged non-repository status did not refresh only its negative-cache timestamp'
+}
+'@
+    $env:PWSH_GIT_UPDATER = $gitUpdater
+    $env:PWSH_GIT_UPDATER_CONTRACT_ROOT = Join-Path $updaterRoot 'git-updater-contract'
+    Invoke-PwshChecked -Name 'GitUpdaterContractSmoke' -Arguments @(
+        '-NoLogo', '-NoProfile', '-Command', $gitUpdaterContractSmokeScript
+    )
     $gitPromptBranchSmokeScript = @'
 $ErrorActionPreference = 'Stop'
 $WarningPreference = 'Stop'
@@ -1594,6 +1690,173 @@ if ($unbornBranch -cne 'prompt-unborn' -or $global:LASTEXITCODE -ne 127 -or $unb
 }
 exit 0
 '@
+    $gitWorkerSmokeScript = @'
+$ErrorActionPreference = 'Stop'
+$WarningPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $true
+. $env:PWSH_PROFILE_SOURCE
+$script:__PwshProfileIsInteractive = $true
+
+$repo = $env:PWSH_GIT_PROMPT_ROOT
+$cacheDir = $env:PWSH_GIT_WORKER_CACHE
+$dirtyFile = Join-Path $repo 'worker-dirty.txt'
+New-Item -ItemType Directory -Force -Path $cacheDir | Out-Null
+Set-Location $repo
+$script:__AsyncGitStatusCacheDir = $cacheDir
+$script:__AsyncGitStatusSessionId = 'worker-smoke'
+$script:__LeanPromptGitGeneration = 7L
+$script:__LeanPromptGitRequestedPath = $null
+$script:__LeanPromptGitRequestedGeneration = -1L
+$script:__LeanPromptGitCompletedPath = $null
+$script:__LeanPromptGitCompletedGeneration = -1L
+$script:__AsyncGitStatusMemoryPath = $null
+
+function Wait-TestGitGeneration([long]$Generation) {
+    $key = Get-AsyncStatusKey -Path $repo
+    $cachePath = Join-Path $cacheDir "$key.json"
+    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($stopwatch.ElapsedMilliseconds -lt 3000) {
+        try {
+            $status = Get-Content -LiteralPath $cachePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+            if ($status.SessionId -ceq 'worker-smoke' -and [long]$status.Generation -eq $Generation) { return $status }
+        }
+        catch {}
+        Start-Sleep -Milliseconds 10
+    }
+    throw "Git worker did not publish generation $Generation (requested=$script:__LeanPromptGitRequestedGeneration completed=$script:__LeanPromptGitCompletedGeneration)"
+}
+
+try {
+    Set-Content -LiteralPath $dirtyFile -Value 'dirty'
+    $null = Get-AsyncGitStatusText
+    $status = Wait-TestGitGeneration 7
+    if (-not $status.IsRepo -or $status.Untracked -ne 1) { throw 'Git worker initial result was invalid' }
+    $freshDirty = Get-AsyncGitStatusText
+    if ((Remove-LeanPromptAnsi $freshDirty) -notmatch '\?1' -or $freshDirty -notmatch "`e\[38;5;39m") {
+        throw 'current Git worker result was not rendered as fresh'
+    }
+
+    Remove-Item -LiteralPath $dirtyFile -Force
+    $script:__LeanPromptGitGeneration = 8L
+    $cachedDirty = Get-AsyncGitStatusText
+    if ((Remove-LeanPromptAnsi $cachedDirty) -notmatch '\?1' -or $cachedDirty -notmatch "`e\[38;5;39m") {
+        throw 'previous Git generation was not retained in color while refresh was pending'
+    }
+    $null = Wait-TestGitGeneration 8
+    $freshClean = Get-AsyncGitStatusText
+    if ((Remove-LeanPromptAnsi $freshClean) -match '\?1') {
+        throw 'fresh clean Git generation did not replace stale status'
+    }
+
+    $key = Get-AsyncStatusKey -Path $repo
+    $cachePath = Join-Path $cacheDir "$key.json"
+    $regressed = Get-Content -LiteralPath $cachePath -Raw | ConvertFrom-Json
+    $regressed.Generation = 7
+    $regressed | ConvertTo-Json -Compress | Set-Content -LiteralPath $cachePath -Encoding UTF8
+    $script:__AsyncGitStatusMemoryLastWriteTimeUtc = [datetime]::MinValue
+    Set-Content -LiteralPath $dirtyFile -Value 'dirty again'
+    $null = Get-AsyncGitStatusText
+    $retried = Wait-TestGitGeneration 8
+    if ($retried.Untracked -ne 1) { throw 'regressed Git generation was not retried with current status' }
+    $null = Get-AsyncGitStatusText
+}
+finally {
+    Stop-LeanPromptGitWorker
+    Remove-Item -LiteralPath $dirtyFile -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $cacheDir -Recurse -Force -ErrorAction SilentlyContinue
+}
+'@
+    $gitLifecycleSmokeScript = @'
+$ErrorActionPreference = 'Stop'
+$WarningPreference = 'Stop'
+. $env:PWSH_PROFILE_SOURCE
+$script:__PwshProfileIsInteractive = $true
+Import-Module PSReadLine
+
+$cacheDir = $env:PWSH_GIT_LIFECYCLE_CACHE
+$script:__AsyncGitStatusCacheDir = $cacheDir
+$script:__AsyncGitStatusSessionId = 'lifecycle-smoke'
+try {
+    if (-not (Start-LeanPromptGitWorker)) { throw 'Git worker lifecycle smoke did not start the worker' }
+    $oldAsyncResult = $script:__AsyncGitStatusWorkerAsyncResult
+    $oldSourceId = $script:__LeanPromptAsyncGitRedrawSourceId
+    $oldExitSubscriptionId = $script:__LeanPromptAsyncGitExitSubscriptionId
+    $watcherSubscribers = @(Get-EventSubscriber | Where-Object {
+        $_.SourceIdentifier.StartsWith("$oldSourceId.", [System.StringComparison]::Ordinal)
+    })
+    if ($watcherSubscribers.Count -ne 1 -or
+        @($watcherSubscribers | Where-Object { $_.Action.Command -notmatch 'PSConsoleReadLine\]::InvokePrompt' }).Count) {
+        throw 'Git worker did not register the expected prompt redraw watchers'
+    }
+    if (-not $oldExitSubscriptionId -or
+        -not (Get-EventSubscriber -SubscriptionId $oldExitSubscriptionId -ErrorAction SilentlyContinue)) {
+        throw 'Git worker did not register session cache cleanup'
+    }
+
+    $cachePath = Join-Path $cacheDir 'status.json'
+    $script:__LeanPromptAsyncGitRedrawState.CachePath = $cachePath
+    Start-Sleep -Milliseconds 100
+    $tempPath = "$cachePath.tmp"
+    Set-Content -LiteralPath $tempPath -Value '{}'
+    [System.IO.File]::Move($tempPath, $cachePath, $true)
+    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($script:__LeanPromptAsyncGitRedrawState.LastUtc -eq [datetime]::MinValue -and
+        $stopwatch.ElapsedMilliseconds -lt 2000) {
+        Start-Sleep -Milliseconds 10
+    }
+    if ($script:__LeanPromptAsyncGitRedrawState.LastUtc -eq [datetime]::MinValue) {
+        throw 'Git cache update did not trigger the prompt redraw action'
+    }
+    $firstRedrawUtc = [datetime]$script:__LeanPromptAsyncGitRedrawState.LastUtc
+    Set-Content -LiteralPath $tempPath -Value '{"Generation":2}'
+    [System.IO.File]::Move($tempPath, $cachePath, $true)
+    $stopwatch.Restart()
+    while ([datetime]$script:__LeanPromptAsyncGitRedrawState.LastUtc -le $firstRedrawUtc -and
+        $stopwatch.ElapsedMilliseconds -lt 2000) {
+        Start-Sleep -Milliseconds 10
+    }
+    if ([datetime]$script:__LeanPromptAsyncGitRedrawState.LastUtc -le $firstRedrawUtc) {
+        throw 'consecutive Git cache update did not trigger a trailing prompt redraw'
+    }
+
+    . (Join-Path (Split-Path -Parent $env:PWSH_PROFILE_SOURCE) 'profile.d\10-prompt.ps1')
+    $null = $oldAsyncResult.AsyncWaitHandle.WaitOne(1000)
+    if (-not $oldAsyncResult.IsCompleted) { throw 'profile reload left the previous Git worker running' }
+    if (Test-Path -LiteralPath $cacheDir) { throw 'profile reload left the previous Git cache directory behind' }
+    if (@(Get-EventSubscriber -ErrorAction SilentlyContinue | Where-Object {
+            $_.SourceIdentifier.StartsWith("$oldSourceId.", [System.StringComparison]::Ordinal)
+        }).Count) {
+        throw 'profile reload left previous Git redraw subscriptions behind'
+    }
+    if (Get-EventSubscriber -SubscriptionId $oldExitSubscriptionId -ErrorAction SilentlyContinue) {
+        throw 'profile reload left the previous Git exit subscription behind'
+    }
+}
+finally {
+    Disable-LeanPromptAsyncRedraw
+}
+'@
+    $env:PWSH_GIT_LIFECYCLE_CACHE = Join-Path $updaterRoot 'git-lifecycle-cache'
+    Invoke-PwshChecked -Name 'GitWorkerLifecycleSmoke' -Arguments @(
+        '-NoLogo', '-NoProfile', '-Command', $gitLifecycleSmokeScript
+    )
+    $env:PWSH_GIT_EXIT_CACHE = Join-Path $updaterRoot 'git-exit-cache'
+    $gitExitCleanupSmokeScript = @'
+. $env:PWSH_PROFILE_SOURCE
+$script:__PwshProfileIsInteractive = $true
+Import-Module PSReadLine
+$script:__AsyncGitStatusCacheDir = $env:PWSH_GIT_EXIT_CACHE
+if (-not (Start-LeanPromptGitWorker)) { exit 1 }
+Set-Content -LiteralPath (Join-Path $script:__AsyncGitStatusCacheDir 'sentinel.json') -Value '{}'
+exit 0
+'@
+    Invoke-PwshChecked -Name 'GitWorkerExitCleanupSmoke' -Arguments @(
+        '-NoLogo', '-NoProfile', '-Command', $gitExitCleanupSmokeScript
+    )
+    if (Test-Path -LiteralPath $env:PWSH_GIT_EXIT_CACHE) {
+        throw 'PowerShell exit left the Git cache directory behind'
+    }
+
     foreach ($gitCase in $gitSmokeCases) {
         & git -C $gitCase.Root -c 'user.name=Profile Test' -c 'user.email=profile@example.invalid' `
             -c commit.gpgSign=true -c gpg.program=definitely-missing-gpg `
@@ -1615,6 +1878,10 @@ exit 0
 
         $env:PWSH_GIT_PROMPT_ROOT = $gitCase.Root
         $env:PWSH_GIT_PROMPT_SEED = $gitCache
+        $env:PWSH_GIT_WORKER_CACHE = Join-Path $updaterRoot "$cacheName-worker"
+        Invoke-PwshChecked -Name "$($gitCase.Name)GitWorkerSmoke" -Arguments @(
+            '-NoLogo', '-NoProfile', '-Command', $gitWorkerSmokeScript
+        )
         Invoke-PwshChecked -Name "$($gitCase.Name)GitPromptBranchSmoke" -Arguments @(
             '-NoLogo', '-NoProfile', '-Command', $gitPromptBranchSmokeScript
         )
