@@ -139,6 +139,7 @@ $script:State.Prompt = @{
         InputActive = $false
         CompletionActive = $false
         QueuedKeys = $null
+        CacheDriven = $false
         PromptCompletedUtc = [datetime]::MinValue
     })
     __LeanPromptAsyncToolchainRedrawWatcher = $null
@@ -1023,6 +1024,11 @@ function prompt {
     $pipelineSucceeded = $?
     $lastExitCode = $global:LASTEXITCODE
     $redrawState = $script:State.Prompt.__LeanPromptAsyncRedrawDispatchState
+    $cacheDriven = [bool]$redrawState.CacheDriven
+    $redrawState.CacheDriven = $false
+    if (-not $cacheDriven) {
+        $script:State.Prompt.__LeanPromptGitGeneration = [long]$script:State.Prompt.__LeanPromptGitGeneration + 1
+    }
     if ($script:State.Prompt.__LeanPromptAsyncRedrawTimer) {
         $script:State.Prompt.__LeanPromptAsyncRedrawTimer.Stop()
         $redrawState.Pending = $false
@@ -1184,7 +1190,9 @@ function Enable-LeanPromptAsyncRedraw {
                     $state.Pending = $false
                     $state.LastUtc = [datetime]::UtcNow
                     $state.Count = [long]$state.Count + 1
-                    [Microsoft.PowerShell.PSConsoleReadLine]::InvokePrompt()
+                    $state.CacheDriven = $true
+                    try { [Microsoft.PowerShell.PSConsoleReadLine]::InvokePrompt() }
+                    finally { $state.CacheDriven = $false }
                 }
                 catch {}
             } | Out-Null

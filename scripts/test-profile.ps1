@@ -584,11 +584,13 @@ function script:Get-LeanPromptPath { param([switch]$Continue) if ($Continue) { '
 function script:Get-AsyncGitStatusText { 'GIT' }
 function script:Get-AsyncToolchainStatusText { '' }
 function script:Get-LeanPromptCommandDurationText { '' }
+$generationBeforePrompt = [long]$script:State.Prompt.__LeanPromptGitGeneration
 $global:LASTEXITCODE = 37
 Write-Error 'force failed prompt state' -ErrorAction SilentlyContinue
 $failedPrompt = prompt
 Assert-Equal $failedPrompt "PATH-CGIT`n${esc}[38;5;196m❯${esc}[0m " 'classic failed prompt snapshot'
 Assert-Equal $global:LASTEXITCODE 37 'failed prompt LASTEXITCODE'
+Assert-Equal $script:State.Prompt.__LeanPromptGitGeneration ($generationBeforePrompt + 1) 'normal prompt Git generation'
 
 $global:LASTEXITCODE = 42
 $null = 1
@@ -597,9 +599,15 @@ Assert-Equal $successfulPrompt "PATH-CGIT`n${esc}[38;5;76m❯${esc}[0m " 'classi
 Assert-Equal $global:LASTEXITCODE 42 'successful prompt LASTEXITCODE'
 if ($failedPrompt -ceq $successfulPrompt) { throw 'successful and failed prompt snapshots are identical' }
 $script:State.Prompt.__LeanPromptStatusOverride = $false
+$script:State.Prompt.__LeanPromptAsyncRedrawDispatchState.CacheDriven = $true
+$generationBeforeCacheRedraw = [long]$script:State.Prompt.__LeanPromptGitGeneration
 $null = 1
 $interruptedPrompt = prompt
 Assert-Equal $interruptedPrompt $failedPrompt 'interrupted prompt snapshot'
+Assert-Equal $script:State.Prompt.__LeanPromptGitGeneration $generationBeforeCacheRedraw 'cache-driven prompt Git generation'
+if ($script:State.Prompt.__LeanPromptAsyncRedrawDispatchState.CacheDriven) {
+    throw 'cache-driven prompt did not consume its redraw marker'
+}
 $script:State.Prompt.__LeanPromptStatusOverride = $null
 }
 '@
@@ -675,15 +683,15 @@ if (-not (Update-LeanPromptAcceptedLineState -Line 'Write-Host ok') -or -not $sc
     throw 'accepted command did not record its start time'
 }
 if ($script:State.Prompt.__LeanPromptGitBranchRefreshPending) { throw 'non-Git accepted command requested a branch refresh' }
-if ($script:State.Prompt.__LeanPromptGitGeneration -ne $generationBeforeAcceptedLine + 1) {
-    throw 'accepted command did not invalidate the Git prompt generation'
+if ($script:State.Prompt.__LeanPromptGitGeneration -ne $generationBeforeAcceptedLine) {
+    throw 'accepted command changed the Git generation before prompt rendering'
 }
 
 $script:State.Prompt.__LeanPromptCommandStartUtc = $null
 $generationBeforeEmptyLine = $script:State.Prompt.__LeanPromptGitGeneration
 if (-not (Update-LeanPromptAcceptedLineState -Line '') -or $script:State.Prompt.__LeanPromptCommandStartUtc -or
     $script:State.Prompt.__LeanPromptGitGeneration -ne $generationBeforeEmptyLine) {
-    throw 'empty accepted line changed prompt timing or Git generation'
+    throw 'empty accepted line changed prompt timing or Git generation before prompt rendering'
 }
 
 $script:State.Prompt.__LeanPromptCommandStartUtc = $null
@@ -2251,6 +2259,7 @@ try {
     $script:State.Prompt.__LeanPromptAsyncGitRedrawState.CachePath = $cachePath
     $toolchainCachePath = Join-Path $script:State.Prompt.__AsyncToolchainStatusCacheDir 'status.json'
     $script:State.Prompt.__LeanPromptAsyncToolchainRedrawState.CachePath = $toolchainCachePath
+    $generationBeforeCacheRedraw = [long]$script:State.Prompt.__LeanPromptGitGeneration
     Start-Sleep -Milliseconds 100
     $tempPath = "$cachePath.tmp"
     Set-Content -LiteralPath $tempPath -Value '{}'
@@ -2262,6 +2271,10 @@ try {
     }
     if ([long]$script:State.Prompt.__LeanPromptAsyncRedrawDispatchState.Count -lt 1) {
         throw 'Git cache update did not trigger the prompt redraw action'
+    }
+    if ([long]$script:State.Prompt.__LeanPromptGitGeneration -ne $generationBeforeCacheRedraw -or
+        $script:State.Prompt.__LeanPromptAsyncRedrawDispatchState.CacheDriven) {
+        throw 'cache-driven prompt redraw advanced the Git generation or retained its redraw marker'
     }
 
     $firstRedrawCount = [long]$script:State.Prompt.__LeanPromptAsyncRedrawDispatchState.Count

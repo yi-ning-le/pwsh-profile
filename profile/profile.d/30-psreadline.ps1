@@ -272,7 +272,6 @@ function Update-LeanPromptAcceptedLineState {
     if ($commands.Count -eq 0) { return $true }
 
     $script:State.Prompt.__LeanPromptCommandStartUtc = [datetime]::UtcNow
-    $script:State.Prompt.__LeanPromptGitGeneration = [long]$script:State.Prompt.__LeanPromptGitGeneration + 1
     foreach ($commandAst in $commands) {
         if (Test-LeanPromptGitBranchRefreshCommand -CommandAst $commandAst) {
             $script:State.Prompt.__LeanPromptGitBranchRefreshPending = $true

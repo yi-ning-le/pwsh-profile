@@ -133,9 +133,11 @@ The display tokens are:
 
 Operation names such as `rebasing`, `merging`, `cherry-picking`, and `reverting` appear as text.
 
-Status is cached per exact working directory under `$env:LOCALAPPDATA\PowerShell\ProfileCache\AsyncGitStatus`. Positive entries use a short TTL; non-repository entries use a slightly longer negative TTL. A lock file suppresses duplicate updater processes.
+Status is cached per exact working directory in a session-specific directory under `$env:LOCALAPPDATA\PowerShell\ProfileCache\AsyncGitStatus\<session-id>`. Every normal prompt cycle treats a repository entry as refreshable and queues at most one request for that prompt generation. Non-repository entries use a short negative TTL, and a lock file suppresses duplicate fallback updater processes.
 
 When an entry is missing or stale, a hidden `pwsh` process runs the source-controlled updater script. Cache files are published atomically. Filesystem watchers observe the active Git and toolchain cache files; updates arriving within 25 milliseconds share one PSReadLine prompt redraw. Pending redraws are consumed by a normal prompt render and suppressed while a command is running, preventing delayed cache events from competing with terminal output.
+
+Normal prompt cycles include prompts produced after commands, empty Enter, and canceled input, so Git changes made by another shell are discovered on the next prompt cycle. Completely idle tabs are not polled. A cache-driven redraw consumes an explicit marker without advancing the Git generation, preventing a completed async update from immediately scheduling another scan.
 
 The persistent interactive worker gives a full scan three seconds. If it times out, the worker retries without untracked-file discovery, allows the reduced scan up to three times longer, and remembers the slow working directory for five minutes. Reduced results keep `Untracked` at `-1`, so the prompt omits `?N` instead of claiming there are no untracked files. A newer request still cancels either scan promptly.
 
