@@ -63,7 +63,7 @@ Narrow terminals hide the right side first, so path and git state remain visible
 The default `classic` symbol set preserves the Nerd Font / Powerline appearance. For a plain-text current session, run:
 
 ```powershell
-$script:LeanPromptSymbolSet = 'ascii'
+Set-LeanPromptSymbolSet ascii
 ```
 
 ASCII mode also replaces the Node, Python, Go, Rust, and .NET icons with readable text. Run `Test-LeanPromptGlyphs` to inspect every symbol, Unicode codepoint, and terminal cell width; it does not inspect the active terminal font.

@@ -80,10 +80,3 @@ function Update-Path {
                  [Environment]::GetEnvironmentVariable('Path', 'User')) -join ';'
 }
 Set-Alias refreshenv Update-Path
-
-# reload: refresh PATH, then reload the profile (one command after installing new tools)
-function reload {
-    Update-Path
-    . $PROFILE.CurrentUserCurrentHost
-    Write-Host 'env + profile reloaded.' -ForegroundColor Green
-}

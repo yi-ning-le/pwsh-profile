@@ -56,7 +56,7 @@ The default `classic` symbol set uses Nerd Font glyphs and Powerline separators.
 For a plain-text session:
 
 ```powershell
-$script:LeanPromptSymbolSet = 'ascii'
+Set-LeanPromptSymbolSet ascii
 ```
 
 ASCII mode replaces private-use glyphs, including language icons, with readable text. `Test-LeanPromptGlyphs` prints every configured symbol, Unicode codepoint, and terminal cell width for troubleshooting.

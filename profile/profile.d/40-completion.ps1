@@ -1,7 +1,12 @@
-if ($global:__PwshProfileIsInteractive) {
+if ($script:State.Session.IsInteractive) {
 # >>> zsh-style path completion >>>
 if (-not (Test-Path function:\__PwshZshDefaultTabExpansion2)) {
-    Copy-Item function:\TabExpansion2 function:\__PwshZshDefaultTabExpansion2
+    $defaultTabExpansion2 = $script:State.Resources.DefaultTabExpansion2
+    if (-not $defaultTabExpansion2) {
+        $defaultTabExpansion2 = (Get-Command TabExpansion2 -CommandType Function -ErrorAction Stop).ScriptBlock
+        $script:State.Resources.DefaultTabExpansion2 = $defaultTabExpansion2
+    }
+    Set-Item function:\__PwshZshDefaultTabExpansion2 -Value $defaultTabExpansion2
 }
 
 function Add-PwshZshDirectorySuffix {
@@ -134,7 +139,7 @@ function Convert-CompletionDisplayToSlashPath {
         [int] $CursorColumn
     )
     if (-not $Completion -or $Completion.CompletionMatches.Count -eq 0) { return $Completion }
-    if (-not $global:__PwshZshPathCompletionEnabled) { return $Completion }
+    if (-not $script:State.Completion.ZshPathCompletionEnabled) { return $Completion }
 
     $typedWord = $null
     if ($InputScript -and $Completion.ReplacementIndex -ge 0 -and
@@ -226,8 +231,8 @@ function New-PwshPathCompletionResult {
 # Ctrl+C from PSReadLine's MenuComplete loop and leave the user stuck in the Tab menu.
 # Instead, detect pending console input (Ctrl+C / Esc / typing) via KeyAvailable and abort
 # cooperative stages; interruptible native commands poll the same flag and Kill on break.
-$global:__PwshCompletionInterruptState = [hashtable]::Synchronized(@{ CtrlC = $false })
-$global:__PwshCompletionInterruptDepth = 0
+$script:State.Completion.CompletionInterruptState = [hashtable]::Synchronized(@{ CtrlC = $false })
+$script:State.Completion.CompletionInterruptDepth = 0
 
 function Initialize-PwshCompletionConsoleInput {
     if ('PwshProfile.ConsoleInput' -as [type]) { return $true }
@@ -327,27 +332,27 @@ function Test-PwshCompletionCtrlCPending {
 }
 
 function Test-PwshCompletionInterrupted {
-    if ($global:__PwshCompletionInterruptState.CtrlC) { return $true }
+    if ($script:State.Completion.CompletionInterruptState.CtrlC) { return $true }
     # Check availability first so Ctrl+C cannot arrive between the Ctrl+C peek and this check
     # and be mistaken for an unrelated key.
     $inputPending = try { [Console]::KeyAvailable } catch { $false }
     if (-not $inputPending) { return $false }
     if (Test-PwshCompletionCtrlCPending) {
-        $global:__PwshCompletionInterruptState.CtrlC = $true
+        $script:State.Completion.CompletionInterruptState.CtrlC = $true
     }
     # Any other pending key also means the user wants out of a slow completer; leave the key queued.
     $true
 }
 
 function Enter-PwshCompletionInterruptScope {
-    $global:__PwshCompletionInterruptDepth++
-    if ($global:__PwshCompletionInterruptDepth -gt 1) { return }
-    $global:__PwshCompletionInterruptState.CtrlC = $false
+    $script:State.Completion.CompletionInterruptDepth++
+    if ($script:State.Completion.CompletionInterruptDepth -gt 1) { return }
+    $script:State.Completion.CompletionInterruptState.CtrlC = $false
 }
 
 function Exit-PwshCompletionInterruptScope {
-    if ($global:__PwshCompletionInterruptDepth -le 0) { return }
-    $global:__PwshCompletionInterruptDepth--
+    if ($script:State.Completion.CompletionInterruptDepth -le 0) { return }
+    $script:State.Completion.CompletionInterruptDepth--
 }
 
 # Run a console tool so Ctrl+C / pending input can abort it: poll the interrupt flag while waiting,
@@ -420,7 +425,7 @@ function Test-PwshCommandPositionWord {
 
 # PowerShell's parameter metadata is sufficient for most path parameters, but it cannot express
 # that these two parameters accept containers only. Aliases are resolved before this table is read.
-$global:__PwshFileSystemParameterCapabilities = @{
+$script:State.Completion.FileSystemParameterCapabilities = @{
     'Microsoft.PowerShell.Management\Set-Location:Path' = 'Container'
     'Microsoft.PowerShell.Management\Set-Location:LiteralPath' = 'Container'
     'Microsoft.PowerShell.Management\Push-Location:Path' = 'Container'
@@ -567,7 +572,7 @@ function Get-PwshFileSystemCompletionContext {
     $defaultContext.ParameterName = $parameterName
     $defaultContext.Backend = 'FileSystem'
     $capabilityKey = '{0}\{1}:{2}' -f $command.ModuleName, $command.Name, $parameterName
-    if ($global:__PwshFileSystemParameterCapabilities[$capabilityKey] -eq 'Container') {
+    if ($script:State.Completion.FileSystemParameterCapabilities[$capabilityKey] -eq 'Container') {
         $defaultContext.ItemKind = 'Container'
     }
     $defaultContext
@@ -723,7 +728,7 @@ function TabExpansion2 {
         [hashtable] $options
     )
 
-    if (-not $global:__PwshZshPathCompletionEnabled) {
+    if (-not $script:State.Completion.ZshPathCompletionEnabled) {
         return __PwshZshDefaultTabExpansion2 @PSBoundParameters
     }
 
@@ -798,15 +803,15 @@ function TabExpansion2 {
 
 # ---- Carapace: Tab completion for git/npm/docker/gh and ~1000 external commands ----
 # Load once on the first Tab so command completion remains rich without delaying the first prompt.
-$global:__PwshCarapaceInitializationState = 'NotStarted'
-$global:__PwshCarapaceInitializationWarningShown = $false
+$script:State.Completion.CarapaceInitializationState = 'NotStarted'
+$script:State.Completion.CarapaceInitializationWarningShown = $false
 function Initialize-PwshCarapaceCompletion {
     param([switch] $Prewarm)
 
-    if ($global:__PwshCarapaceInitializationState -in 'Ready', 'Unavailable' -or
-        $global:__PwshCarapaceInitializationState -eq 'Initializing') { return }
+    if ($script:State.Completion.CarapaceInitializationState -in 'Ready', 'Unavailable' -or
+        $script:State.Completion.CarapaceInitializationState -eq 'Initializing') { return }
 
-    $global:__PwshCarapaceInitializationState = 'Initializing'
+    $script:State.Completion.CarapaceInitializationState = 'Initializing'
     try {
         $__carapaceCommand = Get-Command carapace -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
         if (-not $__carapaceCommand) {
@@ -858,7 +863,7 @@ function Initialize-PwshCarapaceCompletion {
             ) | Out-Null
             if (Test-PwshCompletionInterrupted) {
                 Remove-Item -LiteralPath "$__carapaceCache.tmp" -Force -ErrorAction SilentlyContinue
-                $global:__PwshCarapaceInitializationState = 'NotStarted'
+                $script:State.Completion.CarapaceInitializationState = 'NotStarted'
                 return
             }
             if (-not (Test-Path -LiteralPath $__carapaceCache)) { throw 'Carapace cache was not generated.' }
@@ -919,7 +924,7 @@ function Initialize-PwshCarapaceCompletion {
                     if (Test-PwshCompletionInterrupted) { return }
                     # Cache the file list briefly so quickly repeated Tabs do not rescan a large repository.
                     $completionCacheKey = "$root|$sub|$hasStaged"
-                    $completionCache = $global:__GitPathCompletionFileCache
+                    $completionCache = $script:State.Completion.GitPathCompletionFileCache
                     if ($completionCache -and $completionCache.Key -eq $completionCacheKey -and
                         ([datetime]::UtcNow - $completionCache.StampUtc).TotalSeconds -lt 2.5) {
                         $src = $completionCache.Files
@@ -961,7 +966,7 @@ function Initialize-PwshCarapaceCompletion {
                             }
                         })
                         if (Test-PwshCompletionInterrupted) { return }
-                        $global:__GitPathCompletionFileCache = @{
+                        $script:State.Completion.GitPathCompletionFileCache = @{
                             Key = $completionCacheKey
                             StampUtc = [datetime]::UtcNow
                             Files = $src
@@ -996,24 +1001,24 @@ function Initialize-PwshCarapaceCompletion {
             }
             & $__carapaceNative $wordToComplete $commandAst $cursorPosition
         }.GetNewClosure()
-        $global:__PwshCarapaceInitializationState = 'Ready'
+        $script:State.Completion.CarapaceInitializationState = 'Ready'
     }
     catch {
         Remove-Item -LiteralPath (Join-Path $env:LOCALAPPDATA 'PowerShell\ProfileCache\carapace.ps1.tmp') -Force -ErrorAction SilentlyContinue
         if ($Prewarm -or (Test-PwshCompletionInterrupted)) {
-            $global:__PwshCarapaceInitializationState = 'NotStarted'
+            $script:State.Completion.CarapaceInitializationState = 'NotStarted'
             return
         }
-        $global:__PwshCarapaceInitializationState = 'Unavailable'
-        if (-not $global:__PwshCarapaceInitializationWarningShown) {
-            $global:__PwshCarapaceInitializationWarningShown = $true
+        $script:State.Completion.CarapaceInitializationState = 'Unavailable'
+        if (-not $script:State.Completion.CarapaceInitializationWarningShown) {
+            $script:State.Completion.CarapaceInitializationWarningShown = $true
             Write-Warning "Carapace completion initialization failed; using native completion. $($_.Exception.Message)"
         }
     }
 }
 
 function Start-PwshCompletionPrewarm {
-    if ($global:__PwshCarapaceInitializationState -ne 'NotStarted') { return }
+    if ($script:State.Completion.CarapaceInitializationState -ne 'NotStarted') { return }
 
     try {
         if (-not (Initialize-PwshCompletionConsoleInput)) { return }
@@ -1021,31 +1026,35 @@ function Start-PwshCompletionPrewarm {
     }
     finally {
         # OnIdle is outside a completion action; leave queued Ctrl+C for the normal CancelLine handler.
-        if ($null -eq $global:__PwshCompletionActionState -and $global:__PwshCompletionInterruptState) {
-            $global:__PwshCompletionInterruptState.CtrlC = $false
+        if ($null -eq $script:State.Completion.CompletionActionState -and $script:State.Completion.CompletionInterruptState) {
+            $script:State.Completion.CompletionInterruptState.CtrlC = $false
         }
     }
 }
 
-$global:__PwshCompletionPrewarmSourceId = 'PowerShell.OnIdle'
-$__pwshCompletionPrewarmSubscriber = if ($global:__PwshCompletionPrewarmSubscriptionId) {
-    Get-EventSubscriber -SubscriptionId $global:__PwshCompletionPrewarmSubscriptionId -ErrorAction SilentlyContinue
+$script:State.Completion.CompletionPrewarmSourceId = 'PowerShell.OnIdle'
+$__pwshCompletionPrewarmSubscriber = if ($script:State.Completion.CompletionPrewarmSubscriptionId) {
+    Get-EventSubscriber -SubscriptionId $script:State.Completion.CompletionPrewarmSubscriptionId -ErrorAction SilentlyContinue
 }
 if (-not $__pwshCompletionPrewarmSubscriber) {
-    if ($global:__PwshCompletionPrewarmJobId) {
-        Get-Job -Id $global:__PwshCompletionPrewarmJobId -ErrorAction SilentlyContinue |
+    if ($script:State.Completion.CompletionPrewarmJobId) {
+        Get-Job -Id $script:State.Completion.CompletionPrewarmJobId -ErrorAction SilentlyContinue |
             Where-Object State -NE Running |
             Remove-Job -Force -ErrorAction SilentlyContinue
     }
-    $__pwshCompletionPrewarmJob = Register-EngineEvent -SourceIdentifier $global:__PwshCompletionPrewarmSourceId -MaxTriggerCount 1 -Action {
-        try { Start-PwshCompletionPrewarm }
+    $__pwshCompletionPrewarmJob = Register-EngineEvent -SourceIdentifier $script:State.Completion.CompletionPrewarmSourceId `
+        -MaxTriggerCount 1 -Action {
+        try {
+            $module = Get-Module -Name PwshProfile | Select-Object -First 1
+            if ($module) { & $module { Start-PwshCompletionPrewarm } }
+        }
         finally { $EventSubscriber.Action | Remove-Job -Force -ErrorAction SilentlyContinue }
     }
-    $__pwshCompletionPrewarmSubscriber = Get-EventSubscriber -SourceIdentifier $global:__PwshCompletionPrewarmSourceId |
+    $__pwshCompletionPrewarmSubscriber = Get-EventSubscriber -SourceIdentifier $script:State.Completion.CompletionPrewarmSourceId |
         Where-Object Action -EQ $__pwshCompletionPrewarmJob |
         Select-Object -First 1
-    $global:__PwshCompletionPrewarmSubscriptionId = $__pwshCompletionPrewarmSubscriber.SubscriptionId
-    $global:__PwshCompletionPrewarmJobId = $__pwshCompletionPrewarmJob.Id
+    $script:State.Completion.CompletionPrewarmSubscriptionId = $__pwshCompletionPrewarmSubscriber.SubscriptionId
+    $script:State.Completion.CompletionPrewarmJobId = $__pwshCompletionPrewarmJob.Id
 }
 Remove-Variable __pwshCompletionPrewarmSubscriber, __pwshCompletionPrewarmJob -ErrorAction SilentlyContinue
 }

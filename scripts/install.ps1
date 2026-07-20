@@ -32,7 +32,8 @@ function Assert-PowerShellSyntax {
 }
 
 $sourceFiles = @($source) + @(
-    Get-ChildItem -LiteralPath $sourceParts -Recurse -File -Filter '*.ps1' |
+    Get-ChildItem -LiteralPath $sourceParts -Recurse -File |
+        Where-Object Extension -in '.ps1', '.psm1' |
         Sort-Object FullName |
         ForEach-Object FullName
 )
@@ -71,7 +72,9 @@ $installed = $false
 try {
     New-Item -ItemType Directory -Force -Path $stageParts | Out-Null
     Copy-Item -LiteralPath $source -Destination $stageTarget
-    Get-ChildItem -LiteralPath $sourceParts -Recurse -File -Filter '*.ps1' | ForEach-Object {
+    Get-ChildItem -LiteralPath $sourceParts -Recurse -File |
+        Where-Object Extension -in '.ps1', '.psm1' |
+        ForEach-Object {
         $relative = [System.IO.Path]::GetRelativePath($sourceParts, $_.FullName)
         $destination = Join-Path $stageParts $relative
         New-Item -ItemType Directory -Force -Path (Split-Path -Parent $destination) | Out-Null
@@ -79,7 +82,8 @@ try {
     }
 
     $stageFiles = @($stageTarget) + @(
-        Get-ChildItem -LiteralPath $stageParts -Recurse -File -Filter '*.ps1' |
+        Get-ChildItem -LiteralPath $stageParts -Recurse -File |
+            Where-Object Extension -in '.ps1', '.psm1' |
             Sort-Object FullName |
             ForEach-Object FullName
     )

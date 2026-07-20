@@ -1,4 +1,6 @@
 # ---- fnm (Node version manager, replaces nvm-windows) ----
+if (-not ($script:State -is [hashtable])) { $script:State = @{} }
+
 $__fnmCommand = Get-Command fnm -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
 if (-not $__fnmCommand) {
     Remove-Variable __fnmCommand -ErrorAction SilentlyContinue
@@ -8,11 +10,11 @@ if (-not $__fnmCommand) {
 function Reset-FnmState {
     param([Parameter(Mandatory)][string] $Executable)
 
-    $oldProcessProperty = if ($global:__FnmState) { $global:__FnmState.PSObject.Properties['Process'] }
+    $oldProcessProperty = if ($script:State.Fnm) { $script:State.Fnm.PSObject.Properties['Process'] }
     if ($oldProcessProperty -and $oldProcessProperty.Value) {
         try { $oldProcessProperty.Value.Dispose() } catch {}
     }
-    $global:__FnmState = @{
+    $script:State.Fnm = @{
         SchemaVersion = 1; Status = 'NotStarted'; Executable = $Executable; Process = $null
         StdoutTask = $null; StderrTask = $null; LaunchPath = $null
         LastVersionPath = $null; UseRetryAttempted = $false; WarningShown = $false
@@ -20,35 +22,35 @@ function Reset-FnmState {
 }
 
 $__fnmExecutable = [System.IO.Path]::GetFullPath($__fnmCommand.Source)
-if (-not ($global:__FnmState -is [hashtable]) -or
-    $global:__FnmState['SchemaVersion'] -ne 1 -or
-    -not $global:__FnmState.Executable.Equals($__fnmExecutable, [System.StringComparison]::OrdinalIgnoreCase)) {
+if (-not ($script:State.Fnm -is [hashtable]) -or
+    $script:State.Fnm['SchemaVersion'] -ne 1 -or
+    -not $script:State.Fnm.Executable.Equals($__fnmExecutable, [System.StringComparison]::OrdinalIgnoreCase)) {
     Reset-FnmState -Executable $__fnmExecutable
 }
-$global:__PwshFnmExecutable = $__fnmExecutable
+$script:State.FnmExecutable = $__fnmExecutable
 Remove-Variable __fnmCommand, __fnmExecutable -ErrorAction SilentlyContinue
 
 function Clear-FnmEnvironmentProcess {
-    if ($global:__FnmState.Process) { try { $global:__FnmState.Process.Dispose() } catch {} }
-    $global:__FnmState.Process = $null
-    $global:__FnmState.StdoutTask = $null
-    $global:__FnmState.StderrTask = $null
-    $global:__FnmState.LaunchPath = $null
+    if ($script:State.Fnm.Process) { try { $script:State.Fnm.Process.Dispose() } catch {} }
+    $script:State.Fnm.Process = $null
+    $script:State.Fnm.StdoutTask = $null
+    $script:State.Fnm.StderrTask = $null
+    $script:State.Fnm.LaunchPath = $null
 }
 
 function Start-FnmEnvironmentInitialization {
-    if ($global:__FnmState.Status -in 'Running', 'Ready') { return }
+    if ($script:State.Fnm.Status -in 'Running', 'Ready') { return }
 
     Clear-FnmEnvironmentProcess
     try {
         $psi = [System.Diagnostics.ProcessStartInfo]::new()
-        if ([System.IO.Path]::GetExtension($global:__FnmState.Executable) -in '.cmd', '.bat') {
+        if ([System.IO.Path]::GetExtension($script:State.Fnm.Executable) -in '.cmd', '.bat') {
             $psi.FileName = $env:ComSpec
             [void]$psi.ArgumentList.Add('/d')
             [void]$psi.ArgumentList.Add('/c')
-            [void]$psi.ArgumentList.Add($global:__FnmState.Executable)
+            [void]$psi.ArgumentList.Add($script:State.Fnm.Executable)
         }
-        else { $psi.FileName = $global:__FnmState.Executable }
+        else { $psi.FileName = $script:State.Fnm.Executable }
         [void]$psi.ArgumentList.Add('env')
         [void]$psi.ArgumentList.Add('--json')
         [void]$psi.ArgumentList.Add('--resolve-engines=false')
@@ -61,16 +63,16 @@ function Start-FnmEnvironmentInitialization {
 
         $process = [System.Diagnostics.Process]::new()
         $process.StartInfo = $psi
-        $global:__FnmState.LaunchPath = $env:PATH
+        $script:State.Fnm.LaunchPath = $env:PATH
         [void]$process.Start()
-        $global:__FnmState.Process = $process
-        $global:__FnmState.StdoutTask = $process.StandardOutput.ReadToEndAsync()
-        $global:__FnmState.StderrTask = $process.StandardError.ReadToEndAsync()
-        $global:__FnmState.Status = 'Running'
+        $script:State.Fnm.Process = $process
+        $script:State.Fnm.StdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $script:State.Fnm.StderrTask = $process.StandardError.ReadToEndAsync()
+        $script:State.Fnm.Status = 'Running'
     }
     catch {
         Clear-FnmEnvironmentProcess
-        $global:__FnmState.Status = 'Unavailable'
+        $script:State.Fnm.Status = 'Unavailable'
     }
 }
 
@@ -108,45 +110,45 @@ function Set-FnmEnvironmentFromJson {
 function Complete-FnmEnvironmentInitialization {
     param([switch] $Wait)
 
-    if ($global:__FnmState.Status -eq 'Ready') { return $true }
-    if ($global:__FnmState.Status -ne 'Running') { return $false }
-    $process = $global:__FnmState.Process
+    if ($script:State.Fnm.Status -eq 'Ready') { return $true }
+    if ($script:State.Fnm.Status -ne 'Running') { return $false }
+    $process = $script:State.Fnm.Process
     if (-not $Wait -and -not $process.HasExited) { return $false }
     try {
         if ($Wait) { $process.WaitForExit() }
-        $stdout = $global:__FnmState.StdoutTask.GetAwaiter().GetResult()
-        $null = $global:__FnmState.StderrTask.GetAwaiter().GetResult()
+        $stdout = $script:State.Fnm.StdoutTask.GetAwaiter().GetResult()
+        $null = $script:State.Fnm.StderrTask.GetAwaiter().GetResult()
         if ($process.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($stdout)) { throw 'fnm env failed.' }
         $data = $stdout | ConvertFrom-Json -ErrorAction Stop
-        Set-FnmEnvironmentFromJson -Data $data -LaunchPath $global:__FnmState.LaunchPath
-        $global:__FnmState.Status = 'Ready'
+        Set-FnmEnvironmentFromJson -Data $data -LaunchPath $script:State.Fnm.LaunchPath
+        $script:State.Fnm.Status = 'Ready'
         return $true
     }
     catch {
-        $global:__FnmState.Status = 'Unavailable'
+        $script:State.Fnm.Status = 'Unavailable'
         return $false
     }
     finally { Clear-FnmEnvironmentProcess }
 }
 
 function Initialize-FnmForUse {
-    if (-not ($global:__FnmState -is [hashtable]) -or $global:__FnmState['SchemaVersion'] -ne 1) {
-        Reset-FnmState -Executable $global:__PwshFnmExecutable
+    if (-not ($script:State.Fnm -is [hashtable]) -or $script:State.Fnm['SchemaVersion'] -ne 1) {
+        Reset-FnmState -Executable $script:State.FnmExecutable
     }
 
-    $retryUnavailable = $global:__FnmState.Status -eq 'Unavailable'
-    if ($global:__FnmState.Status -eq 'NotStarted') { Start-FnmEnvironmentInitialization }
-    if ($global:__FnmState.Status -eq 'Running' -and (Complete-FnmEnvironmentInitialization -Wait)) { return $true }
-    if ($global:__FnmState.Status -eq 'Ready') { return $true }
+    $retryUnavailable = $script:State.Fnm.Status -eq 'Unavailable'
+    if ($script:State.Fnm.Status -eq 'NotStarted') { Start-FnmEnvironmentInitialization }
+    if ($script:State.Fnm.Status -eq 'Running' -and (Complete-FnmEnvironmentInitialization -Wait)) { return $true }
+    if ($script:State.Fnm.Status -eq 'Ready') { return $true }
 
-    if ($retryUnavailable -and -not $global:__FnmState.UseRetryAttempted) {
-        $global:__FnmState.UseRetryAttempted = $true
-        $global:__FnmState.Status = 'NotStarted'
+    if ($retryUnavailable -and -not $script:State.Fnm.UseRetryAttempted) {
+        $script:State.Fnm.UseRetryAttempted = $true
+        $script:State.Fnm.Status = 'NotStarted'
         Start-FnmEnvironmentInitialization
         if (Complete-FnmEnvironmentInitialization -Wait) { return $true }
     }
-    if (-not $global:__FnmState.WarningShown) {
-        $global:__FnmState.WarningShown = $true
+    if (-not $script:State.Fnm.WarningShown) {
+        $script:State.Fnm.WarningShown = $true
         Write-Warning 'fnm environment initialization failed; Node commands may be unavailable.'
     }
     $false
@@ -157,29 +159,29 @@ function Update-FnmVersionForCurrentDirectory {
 
     $location = Get-Location
     if ($location.Provider.Name -ne 'FileSystem') {
-        $global:__FnmState.LastVersionPath = $null
+        $script:State.Fnm.LastVersionPath = $null
         return
     }
     $path = $location.ProviderPath
     $hasVersionFile = [System.IO.File]::Exists([System.IO.Path]::Combine($path, '.node-version')) -or
         [System.IO.File]::Exists([System.IO.Path]::Combine($path, '.nvmrc'))
     if (-not $hasVersionFile) {
-        $global:__FnmState.LastVersionPath = $null
+        $script:State.Fnm.LastVersionPath = $null
         return
     }
-    if ($global:__FnmState.LastVersionPath -eq $path) { return }
+    if ($script:State.Fnm.LastVersionPath -eq $path) { return }
     if ($Wait) {
-        if ($global:__FnmState.Status -eq 'NotStarted') { Start-FnmEnvironmentInitialization }
-        if ($global:__FnmState.Status -eq 'Running') { $null = Complete-FnmEnvironmentInitialization -Wait }
-        if ($global:__FnmState.Status -ne 'Ready') { return }
+        if ($script:State.Fnm.Status -eq 'NotStarted') { Start-FnmEnvironmentInitialization }
+        if ($script:State.Fnm.Status -eq 'Running') { $null = Complete-FnmEnvironmentInitialization -Wait }
+        if ($script:State.Fnm.Status -ne 'Ready') { return }
     }
     elseif (-not (Complete-FnmEnvironmentInitialization)) { return }
-    & $global:__FnmState.Executable use --silent-if-unchanged 2>$null | Out-Null
-    if ($global:LASTEXITCODE -eq 0) { $global:__FnmState.LastVersionPath = $path }
+    & $script:State.Fnm.Executable use --silent-if-unchanged 2>$null | Out-Null
+    if ($global:LASTEXITCODE -eq 0) { $script:State.Fnm.LastVersionPath = $path }
 }
 
 function Update-FnmEnvironmentForPrompt {
-    if ($global:__FnmState.Status -eq 'Running') { $null = Complete-FnmEnvironmentInitialization }
+    if ($script:State.Fnm.Status -eq 'Running') { $null = Complete-FnmEnvironmentInitialization }
     Update-FnmVersionForCurrentDirectory -Wait
 }
 
@@ -192,10 +194,10 @@ foreach ($__fnmWrapperName in 'node', 'npm', 'npx', 'pnpm', 'yarn', 'corepack') 
             Select-Object -First 1
         if (-not $__target) { $__target = Get-Command $__commandName -CommandType Application -ErrorAction Stop | Select-Object -First 1 }
         & $__target.Source @args
-    }.GetNewClosure()
+    }
 }
 Remove-Variable __fnmWrapperName -ErrorAction SilentlyContinue
 
-if ($global:__PwshProfileIsInteractive -and $global:__FnmState.Status -eq 'NotStarted') {
+if ($script:State.Session.IsInteractive -and $script:State.Fnm.Status -eq 'NotStarted') {
     Start-FnmEnvironmentInitialization
 }
