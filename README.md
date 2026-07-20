@@ -82,6 +82,8 @@ Git status symbols:
 
 Ahead/behind counts are based on local refs. Run `git fetch` when you want `⇡N` / `⇣N` to reflect the remote's latest state.
 
+If a full status scan exceeds three seconds, the worker retries without untracked-file discovery and remembers that slow working directory for five minutes. During this reduced scan, `?N` is omitted because the untracked count is unknown.
+
 Command duration is shown only for slower commands:
 
 - `< 2s`: hidden

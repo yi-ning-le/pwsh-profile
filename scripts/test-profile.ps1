@@ -258,6 +258,25 @@ $expectedClassicPath = "${esc}[48;5;238m${esc}[38;5;39m ${esc}[38;5;248mR:/${esc
 $classicPath = Format-LeanPromptLeftSegment -Text (Colorize-LeanPromptPath 'R:/Design-Service') -Foreground $script:LeanPromptPalette.Path
 Assert-Equal $classicPath $expectedClassicPath 'classic path snapshot'
 
+$longBranchLine = $classicPath + (Format-LeanPromptGitStatusText -Branch ('feature/' + ('x' * 200)) -Status $null)
+$wideBranchLine = Join-LeanPromptAlignedLine -Left $longBranchLine -Right '' -WindowWidth 120
+$narrowBranchLine = Join-LeanPromptAlignedLine -Left $longBranchLine -Right '' -WindowWidth 40
+if ((Get-LeanPromptDisplayWidth $wideBranchLine) -gt 119 -or
+    (Get-LeanPromptDisplayWidth $narrowBranchLine) -gt 39) {
+    throw 'long branch prompt exceeded the single-line width budget'
+}
+if ((Remove-LeanPromptAnsi $wideBranchLine) -notmatch '…$' -or
+    (Remove-LeanPromptAnsi $narrowBranchLine) -notmatch '…$') {
+    throw 'long branch prompt was not visibly truncated after resize'
+}
+$unicodeLine = Join-LeanPromptAlignedLine -Left ($script:LeanPromptPalette.Path + ('目录🙂' * 30)) -Right '' -WindowWidth 24
+if ((Get-LeanPromptDisplayWidth $unicodeLine) -gt 23 -or
+    (Remove-LeanPromptAnsi $unicodeLine) -notmatch '…$' -or $unicodeLine -match [char]0xFFFD) {
+    throw 'Unicode prompt truncation split a display element or exceeded its width budget'
+}
+$alignedRight = Join-LeanPromptAlignedLine -Left 'left' -Right 'right' -WindowWidth 80
+Assert-Equal $alignedRight "left${esc}[75Gright" 'right prompt safe-column alignment'
+
 $classicGitStatus = [pscustomobject]@{
     IsRepo = $true; Staged = 1; Modified = 2; Untracked = 3; Deleted = 4; Renamed = 5
     Ahead = 6; Behind = 7; Stash = 8; Conflict = 9; Action = 'rebasing'
@@ -278,6 +297,17 @@ $expectedClassicGit = @(
     "${esc}[0m${esc}[38;5;238m${esc}[0m"
 ) -join ''
 Assert-Equal (Format-LeanPromptGitStatusText -Branch 'main' -Status $classicGitStatus) $expectedClassicGit 'classic git snapshot'
+
+$budgetedGit = Format-LeanPromptGitStatusText -Branch ('feature/' + ('long-' * 30)) -Status ([pscustomobject]@{
+        IsRepo = $true; Staged = 1; Modified = 2; Untracked = 3; Ahead = 4; Stash = 5
+    })
+$budgetedGit = Limit-LeanPromptGitStatusWidth -Text $budgetedGit -MaxWidth 45
+$budgetedGitPlain = Remove-LeanPromptAnsi $budgetedGit
+if ((Get-LeanPromptDisplayWidth $budgetedGit) -gt 45 -or $budgetedGitPlain -notmatch 'feature/.+…' -or
+    $budgetedGitPlain -notmatch '\+1' -or $budgetedGitPlain -notmatch '!2' -or
+    $budgetedGitPlain -notmatch '\?3' -or $budgetedGitPlain -notmatch '⇡4' -or $budgetedGitPlain -notmatch '≡5') {
+    throw "semantic Git shortening lost status information: [$budgetedGitPlain]"
+}
 
 $expectedClassicToolchain = @(
     "${esc}[38;5;76m ${esc}[38;5;248mv22 "
@@ -307,6 +337,11 @@ try {
     Remove-Item -LiteralPath (Join-Path $projectPath 'package.json') -Force
     $script:__LeanPromptProjectRootCache[$projectPath].ExpiresUtc = [datetime]::MinValue
     if (Get-LeanPromptProjectRoot -Path $projectPath) { throw 'removed project marker remained cached' }
+    Set-Content -LiteralPath (Join-Path $projectPath 'global.json') -Value '{"sdk":{"version":"9.0.100"}}'
+    $script:__LeanPromptProjectRootCache[$projectPath].ExpiresUtc = [datetime]::MinValue
+    Assert-Equal (Get-LeanPromptProjectRoot -Path $projectPath) $projectPath 'toolchain-only project marker'
+    Remove-Item -LiteralPath (Join-Path $projectPath 'global.json') -Force
+    $script:__LeanPromptProjectRootCache.Clear()
 
     $nestedPath = Join-Path $projectPath 'one\two\three'
     New-Item -ItemType Directory -Force -Path $nestedPath | Out-Null
@@ -339,6 +374,34 @@ try {
 }
 finally {
     Remove-Item -LiteralPath $projectPath -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+$toolchainProject = Join-Path ([System.IO.Path]::GetTempPath()) "lean-prompt-toolchain-project-$PID"
+$toolchainLocation = Get-Location
+$originalToolchainCacheDir = $script:__AsyncToolchainStatusCacheDir
+try {
+    $toolchainRoot = Join-Path $toolchainProject 'root'
+    $toolchainNested = Join-Path $toolchainRoot 'src\feature'
+    $toolchainCacheDir = Join-Path $toolchainProject 'cache'
+    New-Item -ItemType Directory -Force -Path $toolchainNested, $toolchainCacheDir | Out-Null
+    Set-Content -LiteralPath (Join-Path $toolchainRoot '.python-version') -Value '3.13.1'
+    $script:__AsyncToolchainStatusCacheDir = $toolchainCacheDir
+    $toolchainCachePath = Join-Path $toolchainCacheDir "$((Get-AsyncStatusKey -Path $toolchainRoot)).json"
+    [pscustomobject]@{
+        Path = $toolchainRoot; IsProject = $true; Text = 'py 3.13.1'; Updated = [datetime]::UtcNow.ToString('o')
+    } | ConvertTo-Json -Compress | Set-Content -LiteralPath $toolchainCachePath
+    $script:__AsyncToolchainStatusMemoryPath = $null
+    Set-Location $toolchainNested
+    $nestedToolchain = Remove-LeanPromptAnsi (Get-AsyncToolchainStatusText)
+    if ($nestedToolchain -notmatch '3\.13\.1' -or
+        $script:__LeanPromptAsyncToolchainRedrawState.CachePath -cne $toolchainCachePath) {
+        throw "nested directory did not reuse project-root toolchain status: [$nestedToolchain]"
+    }
+}
+finally {
+    Set-Location $toolchainLocation
+    $script:__AsyncToolchainStatusCacheDir = $originalToolchainCacheDir
+    Remove-Item -LiteralPath $toolchainProject -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 $lockTestRoot = Join-Path ([System.IO.Path]::GetTempPath()) "lean-prompt-lock-$PID"
@@ -583,6 +646,9 @@ if (-not $script:__PwshAcceptLine -or
 if ($script:__PwshAcceptLine.Ast.Extent.Text -notmatch '\$script:__LeanPromptStatusOverride\s*=\s*\$null') {
     throw 'Enter handler does not clear the interrupted prompt state'
 }
+if ($script:__PwshAcceptLine.Ast.Extent.Text -notmatch '__LeanPromptAsyncRedrawDispatchState\.InputActive\s*=\s*\$false') {
+    throw 'Enter handler does not suspend async prompt redraw'
+}
 
 if (-not $script:__PwshZshPathCompletionEnabled) { throw 'zsh-style path completion was not enabled' }
 foreach ($selfInsertKey in '/', '\', 'Spacebar', ';', '&', '|') {
@@ -604,6 +670,9 @@ Assert-Equal (Get-PwshCtrlCAction -CompletionActive $true -CompletionInterrupted
 Assert-Equal (Get-PwshCtrlCAction -CompletionActive $false -CompletionInterrupted $true) 'Consume' 'pending completion interrupt ctrl+c action'
 $queuedKeys = $script:__PwshQueuedKeysField.GetValue($script:__PwshReadLineSingleton)
 if ($queuedKeys.Count -ne 0) { throw 'PSReadLine queued-key test did not start with an empty queue' }
+if (-not [object]::ReferenceEquals($queuedKeys, $script:__LeanPromptAsyncRedrawDispatchState.QueuedKeys)) {
+    throw 'PSReadLine queued-key state was not shared with async prompt redraw'
+}
 $keyType = $queuedKeys.GetType().GenericTypeArguments[0]
 $fromConsoleKeyInfo = $keyType.GetMethod(
     'FromConsoleKeyInfo', [System.Reflection.BindingFlags]'Public, Static'
@@ -627,12 +696,17 @@ if ($interruptDefinition.IndexOf('[Console]::KeyAvailable') -gt $interruptDefini
     throw 'completion checked for Ctrl+C before confirming that input was pending'
 }
 $completionActionDefinition = (Get-Command Invoke-PwshCompletionAction).Definition
+$completionGuardStart = $completionActionDefinition.IndexOf('__LeanPromptAsyncRedrawDispatchState.CompletionActive = $true')
 $enableCtrlCInput = $completionActionDefinition.IndexOf('[Console]::TreatControlCAsInput = $true')
 $completionDispatch = $completionActionDefinition.IndexOf('[Microsoft.PowerShell.PSConsoleReadLine]::MenuComplete($Key, $Arg)')
 $deferredCtrlCCheck = $completionActionDefinition.IndexOf('(Test-PwshQueuedCtrlC)')
 $restoreCtrlCInput = $completionActionDefinition.IndexOf('[Console]::TreatControlCAsInput = $previousTreatControlCAsInput')
 if ($enableCtrlCInput -lt 0 -or $enableCtrlCInput -gt $completionDispatch -or $restoreCtrlCInput -lt $completionDispatch) {
     throw 'Ctrl+C input mode does not cover MenuComplete'
+}
+if ($completionGuardStart -lt 0 -or $completionGuardStart -gt $completionDispatch -or
+    $completionActionDefinition.IndexOf('$redrawState.CompletionActive = $null -ne $previousActionState') -lt $restoreCtrlCInput) {
+    throw 'async prompt redraw is not guarded for the whole completion transaction'
 }
 if ($deferredCtrlCCheck -lt $completionDispatch -or $deferredCtrlCCheck -gt $restoreCtrlCInput) {
     throw 'deferred menu Ctrl+C is not detected inside the completion transaction'
@@ -644,6 +718,7 @@ if ($promptFailureState -lt $restoreCtrlCInput -or $promptRedraw -lt $promptFail
 }
 $ctrlCHandlerDefinition = $script:__PwshCtrlCHandler.ToString()
 if ($ctrlCHandlerDefinition.IndexOf('$script:__LeanPromptStatusOverride = $false') -lt 0 -or
+    $ctrlCHandlerDefinition.IndexOf('$script:__LeanPromptAsyncRedrawDispatchState.InputActive = $false') -lt 0 -or
     $ctrlCHandlerDefinition.IndexOf('[Microsoft.PowerShell.PSConsoleReadLine]::CancelLine') -lt 0) {
     throw 'ordinary Ctrl+C does not mark the prompt as failed'
 }
@@ -1221,6 +1296,12 @@ if ($version -cne 'v99.0.0' -or $env:PWSH_FNM_APPLIED -cne 'true' -or $script:__
 }
 . $env:PWSH_PROFILE_SOURCE
 if ($script:__FnmState.Status -cne 'Ready') { throw 'reload discarded ready fnm state' }
+$script:__FnmState.Remove('SchemaVersion')
+. $env:PWSH_PROFILE_SOURCE
+if ($script:__FnmState.SchemaVersion -ne 1 -or $script:__FnmState.Status -cne 'NotStarted' -or
+    -not $script:__FnmState.ContainsKey('WarningShown')) {
+    throw 'reload did not replace legacy fnm state'
+}
 exit 0
 '@
     Invoke-PwshChecked -Name 'FnmSingleInitializationSmoke' -Arguments @('-NoLogo', '-NoProfile', '-Command', $fnmSuccessScript)
@@ -1228,6 +1309,28 @@ exit 0
     if (@($fnmCalls | Where-Object { $_ -ceq 'env --json --resolve-engines=false' }).Count -ne 1 -or
         @($fnmCalls | Where-Object { $_ -ceq 'node --version' }).Count -ne 1) {
         throw "fnm initialization calls were invalid: [$($fnmCalls -join '; ')]"
+    }
+
+    Clear-Content -LiteralPath $env:PWSH_FNM_LOG
+    $fnmShadowScriptPath = Join-Path $testRoot 'fnm-script-state-shadow.ps1'
+    Set-Content -LiteralPath $fnmShadowScriptPath -Value @'
+$ErrorActionPreference = 'Stop'
+$WarningPreference = 'Stop'
+. $env:PWSH_PROFILE_SOURCE
+$script:__FnmState = [pscustomobject]@{ Status = 'Unavailable'; UseRetryAttempted = $true }
+$version = node --version
+if ($version -cne 'v99.0.0' -or $global:__FnmState.Status -cne 'Ready') {
+    throw 'script-scoped state shadowed the global fnm session state'
+}
+exit 0
+'@
+    Invoke-PwshChecked -Name 'FnmScriptStateShadowSmoke' -Arguments @(
+        '-NoLogo', '-NoProfile', '-File', $fnmShadowScriptPath
+    )
+    $fnmCalls = @(Get-Content -LiteralPath $env:PWSH_FNM_LOG)
+    if (@($fnmCalls | Where-Object { $_ -ceq 'env --json --resolve-engines=false' }).Count -ne 1 -or
+        @($fnmCalls | Where-Object { $_ -ceq 'node --version' }).Count -ne 1) {
+        throw "script-scoped fnm initialization calls were invalid: [$($fnmCalls -join '; ')]"
     }
 
     Clear-Content -LiteralPath $env:PWSH_FNM_LOG
@@ -1533,6 +1636,120 @@ if ($negative.Generation -ne 4 -or (Get-Item -LiteralPath $negativePath).LastWri
     Invoke-PwshChecked -Name 'GitUpdaterContractSmoke' -Arguments @(
         '-NoLogo', '-NoProfile', '-Command', $gitUpdaterContractSmokeScript
     )
+    $gitWorkerControlSmokeScript = @'
+$ErrorActionPreference = 'Stop'
+$root = $env:PWSH_GIT_UPDATER_CONTRACT_ROOT
+$fakeGit = Join-Path $PSHOME 'pwsh.exe'
+$oid = '0123456789abcdef0123456789abcdef01234567'
+
+$supersedeMarker = Join-Path $root 'supersede-started'
+$supersededCache = Join-Path $root 'superseded.json'
+$latestCache = Join-Path $root 'latest.json'
+$markerLiteral = $supersedeMarker.Replace("'", "''")
+$hangCommand = "Set-Content -LiteralPath '$markerLiteral' -Value started; Start-Sleep -Seconds 10; exit 0 #"
+$completeCommand = "Write-Output '# branch.oid $oid'; Write-Output '# branch.head main'; exit 0 #"
+$queue = [System.Collections.Concurrent.BlockingCollection[object]]::new(1)
+$worker = [powershell]::Create()
+$asyncResult = $null
+try {
+    $queue.Add([pscustomobject]@{
+        Cwd = $hangCommand; CachePath = $supersededCache; SessionId = 'control'; Generation = 1L
+    })
+    $null = $worker.AddCommand($env:PWSH_GIT_UPDATER).
+        AddParameter('RequestQueue', $queue).
+        AddParameter('GitExecutable', $fakeGit).
+        AddParameter('GitStatusTimeoutMilliseconds', 5000)
+    $asyncResult = $worker.BeginInvoke()
+
+    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    while (-not (Test-Path -LiteralPath $supersedeMarker) -and $stopwatch.ElapsedMilliseconds -lt 4000) {
+        Start-Sleep -Milliseconds 10
+    }
+    if (-not (Test-Path -LiteralPath $supersedeMarker)) { throw 'fake Git status did not start' }
+
+    $stopwatch.Restart()
+    if (-not $queue.TryAdd([pscustomobject]@{
+                Cwd = $completeCommand; CachePath = $latestCache; SessionId = 'control'; Generation = 2L
+            }, 1000)) {
+        throw 'latest Git request could not be queued'
+    }
+    $queue.CompleteAdding()
+    if (-not $asyncResult.AsyncWaitHandle.WaitOne(5000)) { throw 'superseded Git status process was not cancelled' }
+    $null = $worker.EndInvoke($asyncResult)
+    if ($worker.Streams.Error.Count) { throw [string]$worker.Streams.Error[0] }
+    if ($stopwatch.ElapsedMilliseconds -ge 3000) { throw 'latest Git request waited too long for the superseded process' }
+    if (Test-Path -LiteralPath $supersededCache) { throw 'superseded Git request published stale cache data' }
+    $latest = Get-Content -LiteralPath $latestCache -Raw | ConvertFrom-Json
+    if ($latest.Generation -ne 2 -or $latest.Branch -cne 'main') {
+        throw 'latest Git request did not publish after cancelling its predecessor'
+    }
+}
+finally {
+    try { if ($asyncResult -and -not $asyncResult.IsCompleted) { $worker.BeginStop($null, $null) | Out-Null } } catch {}
+    $worker.Dispose()
+    $queue.Dispose()
+}
+
+$retryMarker = Join-Path $root 'retry-started'
+$retryCache = Join-Path $root 'retry.json'
+$markerLiteral = $retryMarker.Replace("'", "''")
+$retryCommand = "if (Test-Path -LiteralPath '$markerLiteral') { Write-Output '# branch.oid $oid'; Write-Output '# branch.head main'; Write-Output '? ignored.txt'; exit 0 }; Set-Content -LiteralPath '$markerLiteral' -Value started; Start-Sleep -Seconds 10; exit 0 #"
+$request = [pscustomobject]@{
+    Cwd = $retryCommand; CachePath = $retryCache; SessionId = 'control'; Generation = 3L
+}
+$queue = [System.Collections.Concurrent.BlockingCollection[object]]::new(1)
+$worker = [powershell]::Create()
+$asyncResult = $null
+try {
+    $queue.Add($request)
+    $null = $worker.AddCommand($env:PWSH_GIT_UPDATER).
+        AddParameter('RequestQueue', $queue).
+        AddParameter('GitExecutable', $fakeGit).
+        AddParameter('GitStatusTimeoutMilliseconds', 2000)
+    $asyncResult = $worker.BeginInvoke()
+
+    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    while (-not (Test-Path -LiteralPath $retryCache) -and $stopwatch.ElapsedMilliseconds -lt 7000) {
+        Start-Sleep -Milliseconds 10
+    }
+    if (-not (Test-Path -LiteralPath $retryCache)) { throw 'timed-out Git status was not retried once' }
+    $retried = Get-Content -LiteralPath $retryCache -Raw | ConvertFrom-Json
+    if ($retried.Generation -ne 3 -or $retried.Branch -cne 'main' -or
+        $retried.Untracked -ne -1 -or [int]$request.Attempt -ne 1) {
+        throw 'Git timeout retry contract is invalid'
+    }
+
+    $rememberedCache = Join-Path $root 'remembered-slow.json'
+    if (-not $queue.TryAdd([pscustomobject]@{
+                Cwd = $retryCommand; CachePath = $rememberedCache; SessionId = 'control'; Generation = 4L
+            }, 1000)) {
+        throw 'remembered slow Git request could not be queued'
+    }
+    $stopwatch.Restart()
+    while (-not (Test-Path -LiteralPath $rememberedCache) -and $stopwatch.ElapsedMilliseconds -lt 4000) {
+        Start-Sleep -Milliseconds 10
+    }
+    if (-not (Test-Path -LiteralPath $rememberedCache)) { throw 'slow Git path was not reused' }
+    $remembered = Get-Content -LiteralPath $rememberedCache -Raw | ConvertFrom-Json
+    if ($remembered.Generation -ne 4 -or $remembered.Untracked -ne -1) {
+        throw 'slow Git path did not retain the reduced scan mode'
+    }
+
+    $queue.CompleteAdding()
+    if (-not $asyncResult.AsyncWaitHandle.WaitOne(3000)) { throw 'Git retry worker did not stop' }
+    $null = $worker.EndInvoke($asyncResult)
+    if ($worker.Streams.Error.Count) { throw [string]$worker.Streams.Error[0] }
+}
+finally {
+    try { if (-not $queue.IsAddingCompleted) { $queue.CompleteAdding() } } catch {}
+    try { if ($asyncResult -and -not $asyncResult.IsCompleted) { $worker.BeginStop($null, $null) | Out-Null } } catch {}
+    $worker.Dispose()
+    $queue.Dispose()
+}
+'@
+    Invoke-PwshChecked -Name 'GitWorkerControlSmoke' -Arguments @(
+        '-NoLogo', '-NoProfile', '-Command', $gitWorkerControlSmokeScript
+    )
     $gitPromptBranchSmokeScript = @'
 $ErrorActionPreference = 'Stop'
 $WarningPreference = 'Stop'
@@ -1775,17 +1992,24 @@ Import-Module PSReadLine
 
 $cacheDir = $env:PWSH_GIT_LIFECYCLE_CACHE
 $script:__AsyncGitStatusCacheDir = $cacheDir
+$script:__AsyncToolchainStatusCacheDir = "$cacheDir-toolchain"
 $script:__AsyncGitStatusSessionId = 'lifecycle-smoke'
 try {
     if (-not (Start-LeanPromptGitWorker)) { throw 'Git worker lifecycle smoke did not start the worker' }
+    $script:__LeanPromptAsyncRedrawDispatchState.InputActive = $true
+    $script:__LeanPromptAsyncRedrawDispatchState.PromptCompletedUtc = [datetime]::UtcNow.AddSeconds(-1)
     $oldAsyncResult = $script:__AsyncGitStatusWorkerAsyncResult
     $oldSourceId = $script:__LeanPromptAsyncGitRedrawSourceId
     $oldExitSubscriptionId = $script:__LeanPromptAsyncGitExitSubscriptionId
-    $watcherSubscribers = @(Get-EventSubscriber | Where-Object {
+    $redrawSubscribers = @(Get-EventSubscriber | Where-Object {
         $_.SourceIdentifier.StartsWith("$oldSourceId.", [System.StringComparison]::Ordinal)
     })
-    if ($watcherSubscribers.Count -ne 1 -or
-        @($watcherSubscribers | Where-Object { $_.Action.Command -notmatch 'PSConsoleReadLine\]::InvokePrompt' }).Count) {
+    $watcherSubscribers = @($redrawSubscribers | Where-Object SourceIdentifier -Like '*.Renamed')
+    $dispatchSubscribers = @($redrawSubscribers | Where-Object SourceIdentifier -Like '*.Dispatch')
+    if ($watcherSubscribers.Count -ne 2 -or
+        @($watcherSubscribers | Where-Object { $_.Action.Command -notmatch 'Timer\.Start' }).Count -or
+        $dispatchSubscribers.Count -ne 1 -or
+        $dispatchSubscribers[0].Action.Command -notmatch 'PSConsoleReadLine\]::InvokePrompt') {
         throw 'Git worker did not register the expected prompt redraw watchers'
     }
     if (-not $oldExitSubscriptionId -or
@@ -1795,28 +2019,104 @@ try {
 
     $cachePath = Join-Path $cacheDir 'status.json'
     $script:__LeanPromptAsyncGitRedrawState.CachePath = $cachePath
+    $toolchainCachePath = Join-Path $script:__AsyncToolchainStatusCacheDir 'status.json'
+    $script:__LeanPromptAsyncToolchainRedrawState.CachePath = $toolchainCachePath
     Start-Sleep -Milliseconds 100
     $tempPath = "$cachePath.tmp"
     Set-Content -LiteralPath $tempPath -Value '{}'
     [System.IO.File]::Move($tempPath, $cachePath, $true)
     $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-    while ($script:__LeanPromptAsyncGitRedrawState.LastUtc -eq [datetime]::MinValue -and
+    while ([long]$script:__LeanPromptAsyncRedrawDispatchState.Count -lt 1 -and
         $stopwatch.ElapsedMilliseconds -lt 2000) {
         Start-Sleep -Milliseconds 10
     }
-    if ($script:__LeanPromptAsyncGitRedrawState.LastUtc -eq [datetime]::MinValue) {
+    if ([long]$script:__LeanPromptAsyncRedrawDispatchState.Count -lt 1) {
         throw 'Git cache update did not trigger the prompt redraw action'
     }
-    $firstRedrawUtc = [datetime]$script:__LeanPromptAsyncGitRedrawState.LastUtc
+
+    $firstRedrawCount = [long]$script:__LeanPromptAsyncRedrawDispatchState.Count
+    $firstGitEventUtc = [datetime]$script:__LeanPromptAsyncGitRedrawState.LastUtc
+    $toolchainTempPath = "$toolchainCachePath.tmp"
     Set-Content -LiteralPath $tempPath -Value '{"Generation":2}'
     [System.IO.File]::Move($tempPath, $cachePath, $true)
+    Set-Content -LiteralPath $toolchainTempPath -Value '{"Text":"py 3.13"}'
+    [System.IO.File]::Move($toolchainTempPath, $toolchainCachePath, $true)
     $stopwatch.Restart()
-    while ([datetime]$script:__LeanPromptAsyncGitRedrawState.LastUtc -le $firstRedrawUtc -and
+    while (([long]$script:__LeanPromptAsyncRedrawDispatchState.Count -le $firstRedrawCount -or
+            [datetime]$script:__LeanPromptAsyncGitRedrawState.LastUtc -le $firstGitEventUtc -or
+            [datetime]$script:__LeanPromptAsyncToolchainRedrawState.LastUtc -eq [datetime]::MinValue) -and
         $stopwatch.ElapsedMilliseconds -lt 2000) {
         Start-Sleep -Milliseconds 10
     }
-    if ([datetime]$script:__LeanPromptAsyncGitRedrawState.LastUtc -le $firstRedrawUtc) {
-        throw 'consecutive Git cache update did not trigger a trailing prompt redraw'
+    Start-Sleep -Milliseconds 100
+    if ([long]$script:__LeanPromptAsyncRedrawDispatchState.Count -ne ($firstRedrawCount + 1) -or
+        [datetime]$script:__LeanPromptAsyncGitRedrawState.LastUtc -le $firstGitEventUtc -or
+        [datetime]$script:__LeanPromptAsyncToolchainRedrawState.LastUtc -eq [datetime]::MinValue) {
+        throw 'Git and toolchain cache updates were not merged into one prompt redraw'
+    }
+
+    $redrawCountBeforeCompletion = [long]$script:__LeanPromptAsyncRedrawDispatchState.Count
+    $script:__LeanPromptAsyncRedrawDispatchState.CompletionActive = $true
+    $script:__LeanPromptAsyncRedrawDispatchState.Pending = $true
+    $script:__LeanPromptAsyncRedrawTimer.Interval = 25
+    $script:__LeanPromptAsyncRedrawTimer.Start()
+    Start-Sleep -Milliseconds 100
+    if ([long]$script:__LeanPromptAsyncRedrawDispatchState.Count -ne $redrawCountBeforeCompletion -or
+        -not $script:__LeanPromptAsyncRedrawDispatchState.Pending) {
+        throw 'completion did not defer async prompt redraw'
+    }
+    $script:__LeanPromptAsyncRedrawDispatchState.CompletionActive = $false
+    $script:__LeanPromptAsyncRedrawTimer.Start()
+    $stopwatch.Restart()
+    while ([long]$script:__LeanPromptAsyncRedrawDispatchState.Count -le $redrawCountBeforeCompletion -and
+        $stopwatch.ElapsedMilliseconds -lt 2000) {
+        Start-Sleep -Milliseconds 10
+    }
+    if ([long]$script:__LeanPromptAsyncRedrawDispatchState.Count -ne ($redrawCountBeforeCompletion + 1) -or
+        $script:__LeanPromptAsyncRedrawDispatchState.Pending) {
+        throw 'deferred completion redraw did not resume'
+    }
+
+    $queuedKeys = [System.Collections.Queue]::new()
+    $queuedKeys.Enqueue('pending')
+    $script:__LeanPromptAsyncRedrawDispatchState.QueuedKeys = $queuedKeys
+    $redrawCountBeforeQueuedKey = [long]$script:__LeanPromptAsyncRedrawDispatchState.Count
+    $script:__LeanPromptAsyncRedrawDispatchState.Pending = $true
+    $script:__LeanPromptAsyncRedrawTimer.Start()
+    Start-Sleep -Milliseconds 100
+    if ([long]$script:__LeanPromptAsyncRedrawDispatchState.Count -ne $redrawCountBeforeQueuedKey -or
+        -not $script:__LeanPromptAsyncRedrawDispatchState.Pending) {
+        throw 'queued input did not defer async prompt redraw'
+    }
+    $null = $queuedKeys.Dequeue()
+    $stopwatch.Restart()
+    while ([long]$script:__LeanPromptAsyncRedrawDispatchState.Count -le $redrawCountBeforeQueuedKey -and
+        $stopwatch.ElapsedMilliseconds -lt 2000) {
+        Start-Sleep -Milliseconds 10
+    }
+    $script:__LeanPromptAsyncRedrawDispatchState.QueuedKeys = $null
+    if ([long]$script:__LeanPromptAsyncRedrawDispatchState.Count -ne ($redrawCountBeforeQueuedKey + 1) -or
+        $script:__LeanPromptAsyncRedrawDispatchState.Pending) {
+        throw 'deferred queued-input redraw did not resume'
+    }
+
+    $redrawCountBeforeCommand = [long]$script:__LeanPromptAsyncRedrawDispatchState.Count
+    $lastGitEventUtc = [datetime]$script:__LeanPromptAsyncGitRedrawState.LastUtc
+    $script:__LeanPromptAsyncRedrawDispatchState.InputActive = $false
+    Set-Content -LiteralPath $tempPath -Value '{"Generation":3}'
+    [System.IO.File]::Move($tempPath, $cachePath, $true)
+    $stopwatch.Restart()
+    while ([datetime]$script:__LeanPromptAsyncGitRedrawState.LastUtc -le $lastGitEventUtc -and
+        $stopwatch.ElapsedMilliseconds -lt 2000) {
+        Start-Sleep -Milliseconds 10
+    }
+    $stopwatch.Restart()
+    while ($script:__LeanPromptAsyncRedrawDispatchState.Pending -and $stopwatch.ElapsedMilliseconds -lt 2000) {
+        Start-Sleep -Milliseconds 10
+    }
+    if ([long]$script:__LeanPromptAsyncRedrawDispatchState.Count -ne $redrawCountBeforeCommand -or
+        $script:__LeanPromptAsyncRedrawDispatchState.Pending) {
+        throw "cache update redrew the prompt while a command was running: before=$redrawCountBeforeCommand after=$($script:__LeanPromptAsyncRedrawDispatchState.Count) pending=$($script:__LeanPromptAsyncRedrawDispatchState.Pending) input=$($script:__LeanPromptAsyncRedrawDispatchState.InputActive) rendering=$($script:__LeanPromptAsyncRedrawDispatchState.Rendering)"
     }
 
     . (Join-Path (Split-Path -Parent $env:PWSH_PROFILE_SOURCE) 'profile.d\10-prompt.ps1')
@@ -1899,6 +2199,19 @@ exit 0
     )
     $toolStatus = Get-Content -LiteralPath $toolCache -Raw | ConvertFrom-Json
     if (-not $toolStatus.IsProject -or $toolStatus.Text -notmatch 'py 3\.13\.1') { throw 'toolchain updater positive cache is invalid' }
+    $toolUpdated = [string]$toolStatus.Updated
+    (Get-Item -LiteralPath $toolCache).LastWriteTimeUtc = [datetime]::UtcNow.AddMinutes(-1)
+    $oldToolWriteUtc = (Get-Item -LiteralPath $toolCache).LastWriteTimeUtc
+    New-Item -ItemType File -Path $toolLock | Out-Null
+    Invoke-PwshChecked -Name 'ToolchainUpdaterUnchangedSmoke' -Arguments @(
+        '-NoLogo', '-NoProfile', '-File', (Join-Path $profilePartsDir 'prompt-updaters\Update-AsyncToolchainStatus.ps1'),
+        '-Cwd', $toolProject, '-CachePath', $toolCache, '-LockPath', $toolLock
+    )
+    $unchangedToolStatus = Get-Content -LiteralPath $toolCache -Raw | ConvertFrom-Json
+    if ([string]$unchangedToolStatus.Updated -cne $toolUpdated -or
+        (Get-Item -LiteralPath $toolCache).LastWriteTimeUtc -le $oldToolWriteUtc) {
+        throw 'unchanged toolchain status rewrote the redraw cache instead of refreshing its TTL'
+    }
     if (@(Get-ChildItem -LiteralPath $updaterRoot -Filter '*.lock').Count -or @(Get-ChildItem -LiteralPath $updaterRoot -Filter '*.tmp').Count) {
         throw 'updater left lock or temporary files behind'
     }

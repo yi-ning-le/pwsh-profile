@@ -135,7 +135,9 @@ Operation names such as `rebasing`, `merging`, `cherry-picking`, and `reverting`
 
 Status is cached per exact working directory under `$env:LOCALAPPDATA\PowerShell\ProfileCache\AsyncGitStatus`. Positive entries use a short TTL; non-repository entries use a slightly longer negative TTL. A lock file suppresses duplicate updater processes.
 
-When an entry is missing or stale, a hidden `pwsh` process runs the source-controlled updater script. Cache files are published atomically. A filesystem watcher observes the active cache file and asks PSReadLine to redraw the prompt after the new status arrives.
+When an entry is missing or stale, a hidden `pwsh` process runs the source-controlled updater script. Cache files are published atomically. Filesystem watchers observe the active Git and toolchain cache files; updates arriving within 25 milliseconds share one PSReadLine prompt redraw. Pending redraws are consumed by a normal prompt render and suppressed while a command is running, preventing delayed cache events from competing with terminal output.
+
+The persistent interactive worker gives a full scan three seconds. If it times out, the worker retries without untracked-file discovery, allows the reduced scan up to three times longer, and remembers the slow working directory for five minutes. Reduced results keep `Untracked` at `-1`, so the prompt omits `?N` instead of claiming there are no untracked files. A newer request still cancels either scan promptly.
 
 The first prompt in a directory can therefore show the correct branch immediately and add dirty-state details in a later redraw.
 

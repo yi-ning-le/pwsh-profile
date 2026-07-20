@@ -19,6 +19,8 @@ $script:__PwshZshPathCompletionEnabled = & {
         }
         $script:__PwshReadLineSingleton = $script:__PwshReadLineSingletonField.GetValue($null)
         if (-not $script:__PwshReadLineSingleton) { throw 'PSReadLine singleton was not found.' }
+        $script:__LeanPromptAsyncRedrawDispatchState.QueuedKeys =
+            $script:__PwshQueuedKeysField.GetValue($script:__PwshReadLineSingleton)
         $separator = $script:__PwshDirectorySeparatorField.GetValue($script:__PwshReadLineSingleton)
         try { $script:__PwshDirectorySeparatorField.SetValue($script:__PwshReadLineSingleton, '/') }
         finally { $script:__PwshDirectorySeparatorField.SetValue($script:__PwshReadLineSingleton, $separator) }
@@ -66,6 +68,7 @@ $script:__PwshCtrlCHandler = {
     }
 
     $script:__LeanPromptStatusOverride = $false
+    $script:__LeanPromptAsyncRedrawDispatchState.InputActive = $false
     [Microsoft.PowerShell.PSConsoleReadLine]::CancelLine($key, $arg)
 }
 Set-PSReadLineKeyHandler -Key Ctrl+c `
@@ -153,6 +156,7 @@ function Invoke-PwshCompletionAction {
     $previousActionState = $script:__PwshCompletionActionState
     $actionState = [pscustomobject]@{ Before = $before; CtrlCHandled = $false }
     $script:__PwshCompletionActionState = $actionState
+    $script:__LeanPromptAsyncRedrawDispatchState.CompletionActive = $true
     $previousTreatControlCAsInput = [Console]::TreatControlCAsInput
     $interrupted = $false
     try {
@@ -176,6 +180,13 @@ function Invoke-PwshCompletionAction {
             $script:__PwshAutoSlashState = $null
         }
         $script:__PwshCompletionActionState = $previousActionState
+        $redrawState = $script:__LeanPromptAsyncRedrawDispatchState
+        $redrawState.CompletionActive = $null -ne $previousActionState
+        if (-not $redrawState.CompletionActive -and $redrawState.Pending -and
+            $script:__LeanPromptAsyncRedrawTimer) {
+            $script:__LeanPromptAsyncRedrawTimer.Interval = 25
+            $script:__LeanPromptAsyncRedrawTimer.Start()
+        }
         if ($actionState.CtrlCHandled -and $script:__PwshCompletionInterruptState) {
             $script:__PwshCompletionInterruptState.CtrlC = $false
         }
@@ -274,6 +285,7 @@ function Update-LeanPromptAcceptedLineState {
 $script:__PwshAcceptLine = {
     param($key, $arg)
     $script:__LeanPromptStatusOverride = $null
+    $script:__LeanPromptAsyncRedrawDispatchState.InputActive = $false
     Remove-PwshAutoSlash
     try {
         $buffer = Get-PwshBufferState

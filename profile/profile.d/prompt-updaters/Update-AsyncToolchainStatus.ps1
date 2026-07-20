@@ -59,10 +59,23 @@ try {
         catch {}
     }
 
+    $status = [pscustomobject]@{
+        Path = $Cwd
+        IsProject = ($parts.Count -gt 0)
+        Text = ($parts -join ' ')
+        Updated = (Get-Date).ToString('o')
+    }
+    try { $cached = Get-Content -LiteralPath $CachePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop }
+    catch { $cached = $null }
+    if ($cached -and [string]$cached.Path -ceq $status.Path -and
+        [bool]$cached.IsProject -eq $status.IsProject -and [string]$cached.Text -ceq $status.Text) {
+        [System.IO.File]::SetLastWriteTimeUtc($CachePath, [datetime]::UtcNow)
+        return
+    }
+
     $tempPath = "$CachePath.$PID.tmp"
     try {
-        [pscustomobject]@{ Path = $Cwd; IsProject = ($parts.Count -gt 0); Text = ($parts -join ' '); Updated = (Get-Date).ToString('o') } |
-            ConvertTo-Json -Compress | Set-Content -LiteralPath $tempPath -Encoding UTF8 -ErrorAction Stop
+        $status | ConvertTo-Json -Compress | Set-Content -LiteralPath $tempPath -Encoding UTF8 -ErrorAction Stop
         [System.IO.File]::Move($tempPath, $CachePath, $true)
     }
     finally {
