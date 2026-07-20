@@ -1296,11 +1296,20 @@ $repo = Join-Path $env:PWSH_COMPLETION_TEST_ROOT 'Repo'
 New-Item -ItemType Directory -Force -Path (Join-Path $repo 'ActualCase\Nested') | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $repo 'Space Dir\Nested') | Out-Null
 Set-Content -LiteralPath (Join-Path $repo 'ActualCase\Nested\File.txt') -Value 'completion smoke'
+Set-Content -LiteralPath (Join-Path $repo 'ActualCase\Nested\Ignored.txt') -Value 'completion smoke'
 Set-Content -LiteralPath (Join-Path $repo 'Space Dir\Nested\File.txt') -Value 'completion smoke'
+Set-Content -LiteralPath (Join-Path $repo '.gitignore') -Value 'ActualCase/Nested/Ignored.txt'
 & git init --quiet --initial-branch=main $repo
 if ($global:LASTEXITCODE -ne 0) { throw 'failed to initialize Git completion smoke repository' }
 & git -C $repo config core.ignorecase false
 if ($global:LASTEXITCODE -ne 0) { throw 'failed to configure case-sensitive Git completion smoke repository' }
+& git -C $repo config user.email completion-smoke@example.invalid
+& git -C $repo config user.name 'Completion Smoke'
+& git -C $repo add --all
+& git -C $repo commit --quiet -m baseline
+if ($global:LASTEXITCODE -ne 0) { throw 'failed to commit Git completion smoke baseline' }
+Set-Content -LiteralPath (Join-Path $repo 'ActualCase\Nested\File.txt') -Value 'changed completion smoke'
+Set-Content -LiteralPath (Join-Path $repo 'Space Dir\Nested\File.txt') -Value 'changed completion smoke'
 
 . $env:PWSH_PROFILE_SOURCE
 $modulePath = Join-Path (Split-Path -Parent $env:PWSH_PROFILE_SOURCE) 'profile.d\PwshProfile.psm1'
@@ -1326,8 +1335,25 @@ function Assert-Completion([string]$Line, [string]$Text, [string]$ListItem, [Sys
 $directoryCompletion = Assert-Completion 'git add actual' 'ActualCase/' 'ActualCase/' ProviderContainer
 $null = Assert-Completion 'git add ActualCase' 'ActualCase/' 'ActualCase/' ProviderContainer
 $null = Assert-Completion 'git add actualcase/nest' 'ActualCase/Nested/' 'ActualCase/Nested/' ProviderContainer
+$null = Assert-Completion 'git add ActualCase/Nested/' 'ActualCase/Nested/File.txt ' 'ActualCase/Nested/File.txt' ProviderItem
 $null = Assert-Completion 'git add ACTUALCASE/NESTED/fi' 'ActualCase/Nested/File.txt ' 'ActualCase/Nested/File.txt' ProviderItem
 $null = Assert-Completion 'git add spa' "'Space Dir/'" 'Space Dir/' ProviderContainer
+
+$genericPathCompleter = {
+    param($wordToComplete)
+    if ($wordToComplete -and $wordToComplete -notmatch '\\') { return }
+    [System.Management.Automation.CompletionResult]::new(
+        'ActualCase\Nested\File.txt',
+        'ActualCase\Nested\File.txt',
+        [System.Management.Automation.CompletionResultType]::ParameterValue,
+        'generic native path'
+    )
+}
+$script:State.Completion.CarapaceNativeArgumentCompleters['tar'] = $genericPathCompleter
+$script:State.Completion.CarapaceNativeArgumentCompleters['tar.exe'] = $genericPathCompleter
+$null = Assert-Completion 'tar -cf out.tar act' 'ActualCase/' 'ActualCase/' ProviderContainer
+$null = Assert-Completion 'tar -cf out.tar ActualCase/' 'ActualCase/Nested/' 'ActualCase/Nested/' ProviderContainer
+$null = Assert-Completion 'tar -cf out.tar ActualCase/Nested/' 'ActualCase/Nested/File.txt ' 'ActualCase/Nested/File.txt' ProviderItem
 
 $flexCompletion = TabExpansion2 -inputScript 'git cherry_pi' -cursorColumn 13 -options @{}
 if ($flexCompletion.CompletionMatches.Count -ne 0) {
@@ -1339,10 +1365,10 @@ Disable-LeanPromptAsyncRedraw
 }
 exit 0
 '@
-        Invoke-PwshChecked -Name 'GitPathCompletionCaseSmoke' -Arguments @('-NoLogo', '-NoProfile', '-Command', $completionSmokeScript)
+        Invoke-PwshChecked -Name 'NativePathCompletionCaseSmoke' -Arguments @('-NoLogo', '-NoProfile', '-Command', $completionSmokeScript)
     }
     else {
-        Write-Host '[SKIP] GitPathCompletionCaseSmoke (carapace is not installed)'
+        Write-Host '[SKIP] NativePathCompletionCaseSmoke (carapace is not installed)'
     }
 
     $fakeFnmDir = Join-Path $testRoot 'fake-fnm'

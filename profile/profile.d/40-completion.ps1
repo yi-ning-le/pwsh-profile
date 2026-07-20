@@ -150,12 +150,35 @@ function Convert-CompletionDisplayToSlashPath {
 
     $convertedMatches = [System.Collections.ObjectModel.Collection[System.Management.Automation.CompletionResult]]::new()
     $directoryMaps = @{}
+    $seenPathCandidates = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::OrdinalIgnoreCase
+    )
+    $typedPath = if ($null -ne $typedWord) { $typedWord.Trim('''"') -replace '\\', '/' }
     foreach ($match in $Completion.CompletionMatches) {
         if (-not (Test-PwshPathCompletionResult $match)) { $convertedMatches.Add($match); continue }
         $canonical = Resolve-PwshCompletionPathCase -Text $match.CompletionText -DirectoryMaps $directoryMaps -TypedWord $typedWord
         if ($canonical) {
-            $convertedMatches.Add((New-PwshPathCompletionResult -Item $canonical.Item `
-                -CandidateText $canonical.Candidate -ListItemText $canonical.ListItem))
+            $candidate = $canonical.Candidate -replace '\\', '/'
+            if ($typedPath -and
+                -not $candidate.StartsWith($typedPath, [System.StringComparison]::OrdinalIgnoreCase)) {
+                continue
+            }
+            $item = $canonical.Item
+            $listItem = $canonical.ListItem
+            if ($null -ne $typedPath -and
+                $candidate.StartsWith($typedPath, [System.StringComparison]::OrdinalIgnoreCase)) {
+                $rest = $candidate.Substring($typedPath.Length)
+                $separatorIndex = $rest.IndexOf('/')
+                if ($separatorIndex -ge 0) {
+                    $candidate = $candidate.Substring(0, $typedPath.Length + $separatorIndex + 1)
+                    $item = Get-Item -LiteralPath $candidate.TrimEnd('/') -Force -ErrorAction SilentlyContinue
+                    $listItem = $candidate
+                }
+            }
+            if ($item -and $seenPathCandidates.Add($candidate)) {
+                $convertedMatches.Add((New-PwshPathCompletionResult -Item $item `
+                    -CandidateText $candidate -ListItemText $listItem))
+            }
             continue
         }
 
@@ -721,6 +744,69 @@ function Get-PwshZshPathCompletion {
         $ReplacementLength
     )
 }
+
+function Get-PwshNativeCompletionContext {
+    param(
+        [string] $InputScript,
+        [int] $CursorColumn
+    )
+
+    $tokens = $null
+    $parseErrors = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseInput($InputScript, [ref]$tokens, [ref]$parseErrors)
+    $commandAst = @($ast.FindAll({
+        param($node)
+        $node -is [System.Management.Automation.Language.CommandAst] -and
+            $node.Extent.StartOffset -le $CursorColumn
+    }, $true) | Sort-Object { $_.Extent.StartOffset } | Select-Object -Last 1)
+    if ($commandAst.Count -ne 1) { return }
+    $commandAst = $commandAst[0]
+    $commandName = $commandAst.GetCommandName()
+    $command = Get-Command $commandName -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $command -or $command.CommandType -notin @(
+        [System.Management.Automation.CommandTypes]::Application,
+        [System.Management.Automation.CommandTypes]::ExternalScript
+    )) { return }
+
+    $wordElement = @()
+    $word = ''
+    $replacementIndex = $CursorColumn
+    $replacementLength = 0
+    if ($CursorColumn -gt 0 -and -not [char]::IsWhiteSpace($InputScript[$CursorColumn - 1])) {
+        $wordElement = @($commandAst.CommandElements | Select-Object -Skip 1 | Where-Object {
+            $_.Extent.StartOffset -le $CursorColumn -and $_.Extent.EndOffset -ge $CursorColumn
+        } | Select-Object -Last 1)
+        if ($wordElement.Count -ne 1) { return }
+        $replacementIndex = $wordElement[0].Extent.StartOffset
+        $replacementLength = $wordElement[0].Extent.Text.Length
+        $word = $wordElement[0].Extent.Text.Substring(0, $CursorColumn - $replacementIndex)
+    }
+
+    $nativeInputScript = $InputScript
+    if ($wordElement.Count -eq 1 -and $wordElement[0].Extent.Text.Contains('/')) {
+        $nativeElement = $wordElement[0].Extent.Text -replace '/', '\'
+        $nativeInputScript = $InputScript.Remove($replacementIndex, $replacementLength).
+            Insert($replacementIndex, $nativeElement)
+        $ast = [System.Management.Automation.Language.Parser]::ParseInput(
+            $nativeInputScript, [ref]$tokens, [ref]$parseErrors
+        )
+        $commandAst = @($ast.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.CommandAst] -and
+                $node.Extent.StartOffset -le $CursorColumn
+        }, $true) | Sort-Object { $_.Extent.StartOffset } | Select-Object -Last 1)[0]
+    }
+
+    [pscustomobject]@{
+        CommandAst = $commandAst
+        CommandName = $commandName
+        InputScript = $nativeInputScript
+        Word = $word -replace '/', '\'
+        ReplacementIndex = $replacementIndex
+        ReplacementLength = $replacementLength
+    }
+}
+
 function TabExpansion2 {
     param(
         [string] $inputScript,
@@ -752,6 +838,52 @@ function TabExpansion2 {
                 $cursorColumn,
                 0
             )
+        }
+
+        $nativeContext = Get-PwshNativeCompletionContext -InputScript $inputScript -CursorColumn $cursorColumn
+        if ($nativeContext) {
+            Initialize-PwshCarapaceCompletion
+            $nativeCompleters = $script:State.Completion.CarapaceNativeArgumentCompleters
+            $nativeKey = if ($nativeCompleters) {
+                @(
+                    $nativeContext.CommandName,
+                    [System.IO.Path]::GetFileName($nativeContext.CommandName),
+                    [System.IO.Path]::GetFileNameWithoutExtension($nativeContext.CommandName)
+                ) | Where-Object { $nativeCompleters.ContainsKey($_) } | Select-Object -First 1
+            }
+            if ($nativeKey) {
+                $nativeCompleter = $nativeCompleters[$nativeKey]
+                $nativeMatches = [System.Collections.ObjectModel.Collection[System.Management.Automation.CompletionResult]]::new()
+                foreach ($match in @(& $nativeCompleter $nativeContext.Word $nativeContext.CommandAst $cursorColumn)) {
+                    if ($match -is [System.Management.Automation.CompletionResult]) { $nativeMatches.Add($match) }
+                }
+                if ($nativeMatches.Count -eq 0 -and $nativeContext.Word) {
+                    $retryInput = $inputScript.Remove(
+                        $nativeContext.ReplacementIndex, $nativeContext.ReplacementLength
+                    )
+                    $retryTokens = $null
+                    $retryErrors = $null
+                    $retryAst = [System.Management.Automation.Language.Parser]::ParseInput(
+                        $retryInput, [ref]$retryTokens, [ref]$retryErrors
+                    )
+                    $retryCommand = @($retryAst.FindAll({
+                        param($node)
+                        $node -is [System.Management.Automation.Language.CommandAst]
+                    }, $true) | Sort-Object { $_.Extent.StartOffset } | Select-Object -Last 1)[0]
+                    foreach ($match in @(& $nativeCompleter '' $retryCommand `
+                        $nativeContext.ReplacementIndex)) {
+                        if ($match -is [System.Management.Automation.CompletionResult] -and
+                            (Test-PwshPathCompletionResult $match)) {
+                            $nativeMatches.Add($match)
+                        }
+                    }
+                }
+                $nativeRaw = [System.Management.Automation.CommandCompletion]::new(
+                    $nativeMatches, -1, $nativeContext.ReplacementIndex, $nativeContext.ReplacementLength
+                )
+                return Convert-CompletionDisplayToSlashPath -Completion $nativeRaw `
+                    -InputScript $inputScript -CursorColumn $cursorColumn
+            }
         }
 
         $context = Get-PwshFileSystemCompletionContext -InputScript $inputScript -CursorColumn $cursorColumn
@@ -889,118 +1021,24 @@ function Initialize-PwshCarapaceCompletion {
             }
         }
 
-        # ---- git path completion: status-aware, stepwise directory completion by subcommand (like native Linux git completion) ----
-        # Problem: carapace cannot descend directories step by step on Windows (known bug), and each subcommand should get different candidates.
-        # Approach: copy git-completion-style filters, pick git file lists by subcommand, then expand step by step from the typed prefix:
-        #       add/stage -> modified + untracked working tree files (exclude fully staged files); rm/mv -> tracked files; clean -> untracked files;
-        #       commit -> staged files; restore -> modified working tree files (or staged files with --staged/-S).
-        #       Directory candidates are marked ProviderContainer so the shared path layer adds `/`.
-        # Leave checkout/reset/diff alone (they mainly complete refs/branches); hand all other subcommands/flags to carapace.
         $__carapaceCompleter = Get-Variable -Name _carapace_completer -ErrorAction SilentlyContinue
         if (-not $__carapaceCompleter -or $__carapaceCompleter.Value -isnot [scriptblock]) {
             throw 'Carapace cache did not define its PowerShell completer.'
         }
-        $__carapaceNative = $__carapaceCompleter.Value
-        $__gitPathSubcmds = @('add', 'stage', 'restore', 'rm', 'mv', 'clean', 'commit')
-        Register-ArgumentCompleter -Native -CommandName 'git', 'git.exe' -ScriptBlock {
-            param($wordToComplete, $commandAst, $cursorPosition)
-            $elems = @($commandAst.CommandElements | ForEach-Object { $_.Extent.Text })
-            $sub = $elems | Select-Object -Skip 1 | Where-Object { $_ -notmatch '^-' } | Select-Object -First 1
-            if (($sub -in $__gitPathSubcmds) -and ($wordToComplete -notmatch '^-')) {
-                if (Test-PwshCompletionInterrupted) { return }
-                $gitCommand = Get-Command git -CommandType Application -ErrorAction SilentlyContinue
-                if (-not $gitCommand) { return }
-                $gitExe = $gitCommand.Source
-                $root = Invoke-PwshInterruptibleNativeCommand -FilePath $gitExe -ArgumentList @('rev-parse', '--show-toplevel') |
-                    Select-Object -First 1
-                if (Test-PwshCompletionInterrupted) { return }
-                if ($root) {
-                    # $root (from rev-parse, forward slashes) is used for git -C across the whole repo; $rootBS (backslashes) is used for path math.
-                    $rootBS = $root -replace '/', '\'
-                    # Note: do not use $PWD -- GetNewClosure() would freeze it to the directory where the profile loaded;
-                    # use Get-Location so cd changes are reflected.
-                    $cwd = (Get-Location).Path
-                    $hasStaged = ($elems -contains '--staged') -or ($elems -ccontains '-S') -or ($elems -contains '--cached')
-                    if (Test-PwshCompletionInterrupted) { return }
-                    # Cache the file list briefly so quickly repeated Tabs do not rescan a large repository.
-                    $completionCacheKey = "$root|$sub|$hasStaged"
-                    $completionCache = $script:State.Completion.GitPathCompletionFileCache
-                    if ($completionCache -and $completionCache.Key -eq $completionCacheKey -and
-                        ([datetime]::UtcNow - $completionCache.StampUtc).TotalSeconds -lt 2.5) {
-                        $src = $completionCache.Files
-                    }
-                    else {
-                        # Pick the file list by subcommand (all output is repo-root-relative); ls-files defaults to cwd, so use git -C <root> to see the whole repo.
-                        $gitBase = @('-C', $root, '-c', 'core.quotepath=false')
-                        $src = @(switch ($sub) {
-                            { $_ -in 'add', 'stage' } {
-                                # Working-tree column (porcelain second char) is non-space = unstaged changes or untracked files remain; exclude fully staged files.
-                                Invoke-PwshInterruptibleNativeCommand -FilePath $gitExe -ArgumentList ($gitBase + @('status', '--porcelain', '--untracked-files=all')) | ForEach-Object {
-                                    if ($_.Length -lt 4 -or $_[1] -eq ' ') { return }
-                                    $p = $_.Substring(3)
-                                    if ($p -match ' -> ') { $p = ($p -split ' -> ')[-1] }   # For renames, use the new name
-                                    $p.Trim('"')
-                                }
-                                break
-                            }
-                            'commit' {
-                                Invoke-PwshInterruptibleNativeCommand -FilePath $gitExe -ArgumentList ($gitBase + @('diff', '--cached', '--name-only'))
-                                break
-                            }
-                            'clean' {
-                                Invoke-PwshInterruptibleNativeCommand -FilePath $gitExe -ArgumentList ($gitBase + @('ls-files', '--others', '--exclude-standard', '--full-name'))
-                                break
-                            }
-                            { $_ -in 'rm', 'mv' } {
-                                Invoke-PwshInterruptibleNativeCommand -FilePath $gitExe -ArgumentList ($gitBase + @('ls-files', '--full-name'))
-                                break
-                            }
-                            'restore' {
-                                if ($hasStaged) {
-                                    Invoke-PwshInterruptibleNativeCommand -FilePath $gitExe -ArgumentList ($gitBase + @('diff', '--cached', '--name-only'))
-                                }
-                                else {
-                                    Invoke-PwshInterruptibleNativeCommand -FilePath $gitExe -ArgumentList ($gitBase + @('ls-files', '--modified', '--full-name'))
-                                }
-                                break
-                            }
-                        })
-                        if (Test-PwshCompletionInterrupted) { return }
-                        $script:State.Completion.GitPathCompletionFileCache = @{
-                            Key = $completionCacheKey
-                            StampUtc = [datetime]::UtcNow
-                            Files = $src
-                        }
-                    }
-                    $dirty = $src | Where-Object { $_ } | ForEach-Object {
-                        [System.IO.Path]::GetRelativePath($cwd, (Join-Path $rootBS ($_ -replace '/', '\')))
-                    }
-                    $word = ($wordToComplete -replace '/', '\').Trim("'`"")
-                    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-                    foreach ($f0 in $dirty) {
-                        if (Test-PwshCompletionInterrupted) { return }
-                        $f = $f0 -replace '/', '\'
-                        if (-not $f.StartsWith($word, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
-                        $rest = $f.Substring($word.Length)
-                        $i = $rest.IndexOf('\')
-                        if ($i -ge 0) {
-                            $cand = $f.Substring(0, $word.Length + $i + 1)          # Directory, with trailing \
-                            $type = [System.Management.Automation.CompletionResultType]::ProviderContainer
-                        }
-                        else {
-                            $cand = $f                                             # File
-                            $type = [System.Management.Automation.CompletionResultType]::ProviderItem
-                        }
-                        if ($seen.Add($cand)) {
-                            $text = if ($cand -match '\s') { "'$cand'" } else { $cand }
-                            [System.Management.Automation.CompletionResult]::new($text, $cand, $type, $cand)
-                        }
-                    }
-                    return
-                }
+
+        # Register-ArgumentCompleter ran inside this module. Retain its complete native map so
+        # every command keeps its semantic completer across path levels.
+        $flags = [System.Reflection.BindingFlags]'NonPublic,Public,Instance'
+        $engineContext = $ExecutionContext.GetType().GetField('_context', $flags).GetValue($ExecutionContext)
+        $registeredCompleters = $engineContext.GetType().
+            GetProperty('NativeArgumentCompleters', $flags).GetValue($engineContext)
+        $nativeCompleters = @{}
+        if ($registeredCompleters) {
+            foreach ($entry in $registeredCompleters.GetEnumerator()) {
+                $nativeCompleters[$entry.Key] = $entry.Value
             }
-            & $__carapaceNative $wordToComplete $commandAst $cursorPosition
-        }.GetNewClosure()
+        }
+        $script:State.Completion.CarapaceNativeArgumentCompleters = $nativeCompleters
         $script:State.Completion.CarapaceInitializationState = 'Ready'
     }
     catch {
