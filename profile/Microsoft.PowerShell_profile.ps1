@@ -1,17 +1,17 @@
 $profileRoot = $PSScriptRoot
-$script:__PwshProfileCommandLine = [Environment]::GetCommandLineArgs()
-$script:__PwshProfileIsBatch = [bool]($script:__PwshProfileCommandLine -match '(?i)^-(Command|c|File|f|EncodedCommand|ec)$')
-$script:__PwshProfileHasNoExit = [bool]($script:__PwshProfileCommandLine -match '(?i)^-(NoExit|noe)$')
-$script:__PwshProfileIsInteractive = $Host.Name -eq 'ConsoleHost' -and
+$global:__PwshProfileCommandLine = [Environment]::GetCommandLineArgs()
+$global:__PwshProfileIsBatch = [bool]($global:__PwshProfileCommandLine -match '(?i)^-(Command|c|File|f|EncodedCommand|ec)$')
+$global:__PwshProfileHasNoExit = [bool]($global:__PwshProfileCommandLine -match '(?i)^-(NoExit|noe)$')
+$global:__PwshProfileIsInteractive = $Host.Name -eq 'ConsoleHost' -and
     -not [Console]::IsInputRedirected -and
     -not [Console]::IsOutputRedirected -and
-    (-not $script:__PwshProfileIsBatch -or $script:__PwshProfileHasNoExit)
+    (-not $global:__PwshProfileIsBatch -or $global:__PwshProfileHasNoExit)
 
 $profileParts = @(
     'profile.d\20-node.ps1',
     'profile.d\10-prompt.ps1',
     'profile.d\25-icons.ps1'
-    if ($script:__PwshProfileIsInteractive) {
+    if ($global:__PwshProfileIsInteractive) {
         'profile.d\30-psreadline.ps1'
         'profile.d\40-completion.ps1'
     }

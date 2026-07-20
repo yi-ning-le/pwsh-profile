@@ -1,34 +1,34 @@
-if ($script:__PwshProfileIsInteractive) {
+if ($global:__PwshProfileIsInteractive) {
 # ---- PSReadLine: history autosuggestions + syntax highlighting + key bindings (like zsh plugins) ----
 Import-Module PSReadLine
-$script:__PwshZshPathCompletionEnabled = & {
+$global:__PwshZshPathCompletionEnabled = & {
     try {
         $type = [Microsoft.PowerShell.PSConsoleReadLine]
-        $script:__PwshReadLineSingletonField = $type.GetField(
+        $global:__PwshReadLineSingletonField = $type.GetField(
             '_singleton', [System.Reflection.BindingFlags]'NonPublic, Static'
         )
-        $script:__PwshDirectorySeparatorField = $type.GetField(
+        $global:__PwshDirectorySeparatorField = $type.GetField(
             '_directorySeparator', [System.Reflection.BindingFlags]'NonPublic, Instance'
         )
-        $script:__PwshQueuedKeysField = $type.GetField(
+        $global:__PwshQueuedKeysField = $type.GetField(
             '_queuedKeys', [System.Reflection.BindingFlags]'NonPublic, Instance'
         )
-        if (-not $script:__PwshReadLineSingletonField -or -not $script:__PwshDirectorySeparatorField -or
-            -not $script:__PwshQueuedKeysField) {
+        if (-not $global:__PwshReadLineSingletonField -or -not $global:__PwshDirectorySeparatorField -or
+            -not $global:__PwshQueuedKeysField) {
             throw 'Required PSReadLine fields were not found.'
         }
-        $script:__PwshReadLineSingleton = $script:__PwshReadLineSingletonField.GetValue($null)
-        if (-not $script:__PwshReadLineSingleton) { throw 'PSReadLine singleton was not found.' }
-        $script:__LeanPromptAsyncRedrawDispatchState.QueuedKeys =
-            $script:__PwshQueuedKeysField.GetValue($script:__PwshReadLineSingleton)
-        $separator = $script:__PwshDirectorySeparatorField.GetValue($script:__PwshReadLineSingleton)
-        try { $script:__PwshDirectorySeparatorField.SetValue($script:__PwshReadLineSingleton, '/') }
-        finally { $script:__PwshDirectorySeparatorField.SetValue($script:__PwshReadLineSingleton, $separator) }
+        $global:__PwshReadLineSingleton = $global:__PwshReadLineSingletonField.GetValue($null)
+        if (-not $global:__PwshReadLineSingleton) { throw 'PSReadLine singleton was not found.' }
+        $global:__LeanPromptAsyncRedrawDispatchState.QueuedKeys =
+            $global:__PwshQueuedKeysField.GetValue($global:__PwshReadLineSingleton)
+        $separator = $global:__PwshDirectorySeparatorField.GetValue($global:__PwshReadLineSingleton)
+        try { $global:__PwshDirectorySeparatorField.SetValue($global:__PwshReadLineSingleton, '/') }
+        finally { $global:__PwshDirectorySeparatorField.SetValue($global:__PwshReadLineSingleton, $separator) }
         $true
     }
     catch {
-        if (-not $script:__PwshZshPathCompletionWarningShown) {
-            $script:__PwshZshPathCompletionWarningShown = $true
+        if (-not $global:__PwshZshPathCompletionWarningShown) {
+            $global:__PwshZshPathCompletionWarningShown = $true
             Write-Warning "Zsh-style slash path completion is unavailable; using native PSReadLine completion. $($_.Exception.Message)" `
                 -WarningAction Continue
         }
@@ -40,41 +40,41 @@ Set-PSReadLineOption -HistorySearchCursorMovesToEnd
 Set-PSReadLineOption -EditMode Emacs                      # Emacs keybindings (change to Vi for vi mode)
 Set-PSReadLineOption -BellStyle None
 Set-PSReadLineOption -ExtraPromptLineCount 1
-$script:__PwshCompletionActionState = $null
+$global:__PwshCompletionActionState = $null
 function Get-PwshCtrlCAction {
     param(
-        [bool] $CompletionActive = ($null -ne $script:__PwshCompletionActionState),
-        [bool] $CompletionInterrupted = [bool]($script:__PwshCompletionInterruptState -and $script:__PwshCompletionInterruptState.CtrlC)
+        [bool] $CompletionActive = ($null -ne $global:__PwshCompletionActionState),
+        [bool] $CompletionInterrupted = [bool]($global:__PwshCompletionInterruptState -and $global:__PwshCompletionInterruptState.CtrlC)
     )
 
     if ($CompletionActive) { return 'Abort' }
     if ($CompletionInterrupted) { return 'Consume' }
     'CancelLine'
 }
-$script:__PwshCtrlCHandler = {
+$global:__PwshCtrlCHandler = {
     param($key, $arg)
 
     $action = Get-PwshCtrlCAction
     if ($action -eq 'Consume') {
         # TabExpansion2 already stopped and restored the buffer; only consume its queued Ctrl+C.
-        $script:__PwshCompletionInterruptState.CtrlC = $false
+        $global:__PwshCompletionInterruptState.CtrlC = $false
         return
     }
     if ($action -eq 'Abort') {
-        $script:__PwshCompletionInterruptState.CtrlC = $true
-        $script:__PwshCompletionActionState.CtrlCHandled = $true
+        $global:__PwshCompletionInterruptState.CtrlC = $true
+        $global:__PwshCompletionActionState.CtrlCHandled = $true
         [Microsoft.PowerShell.PSConsoleReadLine]::Abort($key, $arg)
         return
     }
 
-    $script:__LeanPromptStatusOverride = $false
-    $script:__LeanPromptAsyncRedrawDispatchState.InputActive = $false
+    $global:__LeanPromptStatusOverride = $false
+    $global:__LeanPromptAsyncRedrawDispatchState.InputActive = $false
     [Microsoft.PowerShell.PSConsoleReadLine]::CancelLine($key, $arg)
 }
 Set-PSReadLineKeyHandler -Key Ctrl+c `
     -BriefDescription PwshCompletionAwareCtrlC `
     -Description 'Abort completion without clearing its input; cancel the line otherwise.' `
-    -ScriptBlock $script:__PwshCtrlCHandler
+    -ScriptBlock $global:__PwshCtrlCHandler
 
 # History autosuggestions: keep inline gray suggestions (InlineView), disable noisy multi-line dropdowns (ListView).
 # Press RightArrow / End to accept gray suggestions; Ctrl+R searches history; UpArrow searches by current prefix.
@@ -105,7 +105,7 @@ function Restore-PwshCompletionBuffer {
 }
 function Test-PwshQueuedCtrlC {
     try {
-        $queue = $script:__PwshQueuedKeysField.GetValue($script:__PwshReadLineSingleton)
+        $queue = $global:__PwshQueuedKeysField.GetValue($global:__PwshReadLineSingleton)
         if (-not $queue -or $queue.Count -eq 0) { return $false }
         $key = $queue.Peek().AsConsoleKeyInfo()
         $key.KeyChar -ceq [char]3 -or
@@ -116,34 +116,34 @@ function Test-PwshQueuedCtrlC {
 function Set-PwshAutoSlashState {
     param($Before, $After)
 
-    $script:__PwshAutoSlashState = $null
+    $global:__PwshAutoSlashState = $null
     if ($After.Line -cne $Before.Line -and $After.Cursor -gt 0 -and
         $After.Line[$After.Cursor - 1] -ceq '/') {
-        $script:__PwshAutoSlashState = $After
+        $global:__PwshAutoSlashState = $After
     }
 }
 function Remove-PwshAutoSlash {
     $state = Get-PwshBufferState
-    if (-not $script:__PwshAutoSlashState -or $state.Cursor -ne $script:__PwshAutoSlashState.Cursor -or
-        $state.Line -cne $script:__PwshAutoSlashState.Line -or $state.Cursor -le 0 -or
+    if (-not $global:__PwshAutoSlashState -or $state.Cursor -ne $global:__PwshAutoSlashState.Cursor -or
+        $state.Line -cne $global:__PwshAutoSlashState.Line -or $state.Cursor -le 0 -or
         $state.Line[$state.Cursor - 1] -cne '/') {
-        $script:__PwshAutoSlashState = $null
+        $global:__PwshAutoSlashState = $null
         return
     }
     [Microsoft.PowerShell.PSConsoleReadLine]::BackwardDeleteChar($null, $null)
-    $script:__PwshAutoSlashState = $null
+    $global:__PwshAutoSlashState = $null
 }
 function Invoke-PwshWithDirectorySeparator {
     param([Parameter(Mandatory)][scriptblock] $ScriptBlock)
 
-    if (-not $script:__PwshZshPathCompletionEnabled) { return & $ScriptBlock }
-    $previousSeparator = $script:__PwshDirectorySeparatorField.GetValue($script:__PwshReadLineSingleton)
+    if (-not $global:__PwshZshPathCompletionEnabled) { return & $ScriptBlock }
+    $previousSeparator = $global:__PwshDirectorySeparatorField.GetValue($global:__PwshReadLineSingleton)
     try {
-        $script:__PwshDirectorySeparatorField.SetValue($script:__PwshReadLineSingleton, '/')
+        $global:__PwshDirectorySeparatorField.SetValue($global:__PwshReadLineSingleton, '/')
         & $ScriptBlock
     }
     finally {
-        $script:__PwshDirectorySeparatorField.SetValue($script:__PwshReadLineSingleton, $previousSeparator)
+        $global:__PwshDirectorySeparatorField.SetValue($global:__PwshReadLineSingleton, $previousSeparator)
     }
 }
 function Invoke-PwshCompletionAction {
@@ -153,10 +153,10 @@ function Invoke-PwshCompletionAction {
     )
 
     $before = Get-PwshBufferState
-    $previousActionState = $script:__PwshCompletionActionState
+    $previousActionState = $global:__PwshCompletionActionState
     $actionState = [pscustomobject]@{ Before = $before; CtrlCHandled = $false }
-    $script:__PwshCompletionActionState = $actionState
-    $script:__LeanPromptAsyncRedrawDispatchState.CompletionActive = $true
+    $global:__PwshCompletionActionState = $actionState
+    $global:__LeanPromptAsyncRedrawDispatchState.CompletionActive = $true
     $previousTreatControlCAsInput = [Console]::TreatControlCAsInput
     $interrupted = $false
     try {
@@ -169,30 +169,30 @@ function Invoke-PwshCompletionAction {
         # MenuComplete handles Ctrl+C as an ordinary chord and prepends it for the outer input
         # loop. Mark it before leaving this transaction so the snapshot is restored first.
         if (Test-PwshQueuedCtrlC) {
-            $script:__PwshCompletionInterruptState.CtrlC = $true
+            $global:__PwshCompletionInterruptState.CtrlC = $true
         }
     }
     finally {
         [Console]::TreatControlCAsInput = $previousTreatControlCAsInput
-        $interrupted = [bool]($script:__PwshCompletionInterruptState -and $script:__PwshCompletionInterruptState.CtrlC)
+        $interrupted = [bool]($global:__PwshCompletionInterruptState -and $global:__PwshCompletionInterruptState.CtrlC)
         if ($interrupted) {
             try { Restore-PwshCompletionBuffer -Before $before } catch {}
-            $script:__PwshAutoSlashState = $null
+            $global:__PwshAutoSlashState = $null
         }
-        $script:__PwshCompletionActionState = $previousActionState
-        $redrawState = $script:__LeanPromptAsyncRedrawDispatchState
+        $global:__PwshCompletionActionState = $previousActionState
+        $redrawState = $global:__LeanPromptAsyncRedrawDispatchState
         $redrawState.CompletionActive = $null -ne $previousActionState
         if (-not $redrawState.CompletionActive -and $redrawState.Pending -and
-            $script:__LeanPromptAsyncRedrawTimer) {
-            $script:__LeanPromptAsyncRedrawTimer.Interval = 25
-            $script:__LeanPromptAsyncRedrawTimer.Start()
+            $global:__LeanPromptAsyncRedrawTimer) {
+            $global:__LeanPromptAsyncRedrawTimer.Interval = 25
+            $global:__LeanPromptAsyncRedrawTimer.Start()
         }
-        if ($actionState.CtrlCHandled -and $script:__PwshCompletionInterruptState) {
-            $script:__PwshCompletionInterruptState.CtrlC = $false
+        if ($actionState.CtrlCHandled -and $global:__PwshCompletionInterruptState) {
+            $global:__PwshCompletionInterruptState.CtrlC = $false
         }
     }
     if ($interrupted) {
-        $script:__LeanPromptStatusOverride = $false
+        $global:__LeanPromptStatusOverride = $false
         try { [Microsoft.PowerShell.PSConsoleReadLine]::InvokePrompt() } catch {}
     }
     else {
@@ -200,7 +200,7 @@ function Invoke-PwshCompletionAction {
     }
     -not $interrupted
 }
-if ($script:__PwshZshPathCompletionEnabled) {
+if ($global:__PwshZshPathCompletionEnabled) {
 Set-PSReadLineKeyHandler -Key Tab `
     -BriefDescription ZshMenuComplete `
     -Description 'Open menu completion immediately.' `
@@ -219,7 +219,7 @@ Set-PSReadLineKeyHandler -Key Shift+Tab `
 
 # Zsh AUTO_REMOVE_SLASH: a separator added by directory completion is replaceable. A slash
 # typed normally is still just SelfInsert and never starts completion.
-$script:__PwshAutoSlashSelfInsert = {
+$global:__PwshAutoSlashSelfInsert = {
     param($key, $arg)
     Remove-PwshAutoSlash
     [Microsoft.PowerShell.PSConsoleReadLine]::SelfInsert($key, $arg)
@@ -227,7 +227,7 @@ $script:__PwshAutoSlashSelfInsert = {
 Set-PSReadLineKeyHandler -Key '/', '\', Spacebar, ';', '&', '|' `
     -BriefDescription ZshAutoRemoveSlash `
     -Description 'Insert the key, removing an automatically completed directory slash first.' `
-    -ScriptBlock $script:__PwshAutoSlashSelfInsert
+    -ScriptBlock $global:__PwshAutoSlashSelfInsert
 
 function Test-LeanPromptGitBranchRefreshCommand {
     param([Parameter(Mandatory)][System.Management.Automation.Language.CommandAst] $CommandAst)
@@ -271,21 +271,21 @@ function Update-LeanPromptAcceptedLineState {
     $commands = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] }, $true))
     if ($commands.Count -eq 0) { return $true }
 
-    $script:__LeanPromptCommandStartUtc = [datetime]::UtcNow
-    $script:__LeanPromptGitGeneration = [long]$script:__LeanPromptGitGeneration + 1
+    $global:__LeanPromptCommandStartUtc = [datetime]::UtcNow
+    $global:__LeanPromptGitGeneration = [long]$global:__LeanPromptGitGeneration + 1
     foreach ($commandAst in $commands) {
         if (Test-LeanPromptGitBranchRefreshCommand -CommandAst $commandAst) {
-            $script:__LeanPromptGitBranchRefreshPending = $true
+            $global:__LeanPromptGitBranchRefreshPending = $true
             break
         }
     }
     $true
 }
 
-$script:__PwshAcceptLine = {
+$global:__PwshAcceptLine = {
     param($key, $arg)
-    $script:__LeanPromptStatusOverride = $null
-    $script:__LeanPromptAsyncRedrawDispatchState.InputActive = $false
+    $global:__LeanPromptStatusOverride = $null
+    $global:__LeanPromptAsyncRedrawDispatchState.InputActive = $false
     Remove-PwshAutoSlash
     try {
         $buffer = Get-PwshBufferState
@@ -299,8 +299,8 @@ $script:__PwshAcceptLine = {
 Set-PSReadLineKeyHandler -Key Enter `
     -BriefDescription ZshAcceptLine `
     -Description 'Accept the line after removing an automatically completed directory slash.' `
-    -ScriptBlock $script:__PwshAcceptLine
-$script:__LeanPromptDurationEnabled = $true
+    -ScriptBlock $global:__PwshAcceptLine
+$global:__LeanPromptDurationEnabled = $true
 }
 # RightArrow / End: accept the full inline suggestion at end of line; Ctrl+RightArrow accepts one word (zsh feel)
 Set-PSReadLineKeyHandler -Key RightArrow      -Function ForwardChar

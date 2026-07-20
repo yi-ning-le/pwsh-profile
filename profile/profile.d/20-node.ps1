@@ -196,6 +196,6 @@ foreach ($__fnmWrapperName in 'node', 'npm', 'npx', 'pnpm', 'yarn', 'corepack') 
 }
 Remove-Variable __fnmWrapperName -ErrorAction SilentlyContinue
 
-if ($script:__PwshProfileIsInteractive -and $global:__FnmState.Status -eq 'NotStarted') {
+if ($global:__PwshProfileIsInteractive -and $global:__FnmState.Status -eq 'NotStarted') {
     Start-FnmEnvironmentInitialization
 }

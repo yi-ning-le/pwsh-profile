@@ -5,16 +5,16 @@
 # ============================================================
 
 # ---- Pure PowerShell prompt (Starship lean / powerlevel10k inspired) ----
-$script:__LeanPromptAnsiRegex = [regex]::new(([regex]::Escape([string][char]27)) + '\[[0-9;]*m')
-$script:__LeanPromptProjectRootCache = @{}
-$script:__LeanPromptProjectRootCacheTtlSeconds = 60
-$script:__LeanPromptCommandStartUtc = $null
-$script:__LeanPromptDurationEnabled = $false
-$script:__LeanPromptStatusOverride = $null
-$script:__LeanPromptRightMinWidth = 50
-$script:__LeanPromptRightGapCells = 2
+$global:__LeanPromptAnsiRegex = [regex]::new(([regex]::Escape([string][char]27)) + '\[[0-9;]*m')
+$global:__LeanPromptProjectRootCache = @{}
+$global:__LeanPromptProjectRootCacheTtlSeconds = 60
+$global:__LeanPromptCommandStartUtc = $null
+$global:__LeanPromptDurationEnabled = $false
+$global:__LeanPromptStatusOverride = $null
+$global:__LeanPromptRightMinWidth = 50
+$global:__LeanPromptRightGapCells = 2
 
-$script:LeanPromptPalette = @{
+$global:LeanPromptPalette = @{
     Reset            = "`e[0m"
     SegmentBg        = "`e[48;5;238m"
     SegmentText      = "`e[38;5;252m"
@@ -47,8 +47,8 @@ $script:LeanPromptPalette = @{
     DotNet           = "`e[38;5;141m"
 }
 
-$script:LeanPromptSymbolSet = 'classic'
-$script:LeanPromptSymbolsBySet = @{
+$global:LeanPromptSymbolSet = 'classic'
+$global:LeanPromptSymbolsBySet = @{
     classic = @{
         PathContinueSeparator = ''
         SegmentSeparator      = ''
@@ -96,14 +96,14 @@ $script:LeanPromptSymbolsBySet = @{
 }
 
 function global:Get-LeanPromptSymbols {
-    $setName = if ($script:LeanPromptSymbolSet) { [string]$script:LeanPromptSymbolSet } else { 'classic' }
-    if ($script:LeanPromptSymbolsBySet.ContainsKey($setName)) { return $script:LeanPromptSymbolsBySet[$setName] }
-    $script:LeanPromptSymbolsBySet['classic']
+    $setName = if ($global:LeanPromptSymbolSet) { [string]$global:LeanPromptSymbolSet } else { 'classic' }
+    if ($global:LeanPromptSymbolsBySet.ContainsKey($setName)) { return $global:LeanPromptSymbolsBySet[$setName] }
+    $global:LeanPromptSymbolsBySet['classic']
 }
 
 function global:Test-LeanPromptGlyphs {
-    $rows = foreach ($setName in ($script:LeanPromptSymbolsBySet.Keys | Sort-Object)) {
-        $symbols = $script:LeanPromptSymbolsBySet[$setName]
+    $rows = foreach ($setName in ($global:LeanPromptSymbolsBySet.Keys | Sort-Object)) {
+        $symbols = $global:LeanPromptSymbolsBySet[$setName]
         foreach ($name in ($symbols.Keys | Sort-Object)) {
             $glyph = [string]$symbols[$name]
             $runes = @($glyph.EnumerateRunes())
@@ -123,8 +123,8 @@ function global:Test-LeanPromptGlyphs {
 
     Write-Host ''
     Write-Host 'Samples:'
-    foreach ($setName in ($script:LeanPromptSymbolsBySet.Keys | Sort-Object)) {
-        $symbols = $script:LeanPromptSymbolsBySet[$setName]
+    foreach ($setName in ($global:LeanPromptSymbolsBySet.Keys | Sort-Object)) {
+        $symbols = $global:LeanPromptSymbolsBySet[$setName]
         $path = "R:/Design-Service $($symbols.ReadOnly) $($symbols.PathContinueSeparator) $($symbols.SegmentSeparator)"
         $git = "$($symbols.GitBranch) branch $($symbols.GitStaged)1 $($symbols.GitModified)2 $($symbols.GitUntracked)3 $($symbols.GitDeleted)4 $($symbols.GitRenamed)5 $($symbols.GitAhead)6 $($symbols.GitBehind)7 $($symbols.GitStash)8 $($symbols.GitConflict)9"
         Write-Host ("{0}: {1} | {2} | {3}" -f $setName, $path, $git, $symbols.PromptChar)
@@ -134,7 +134,7 @@ function global:Test-LeanPromptGlyphs {
 function global:Remove-LeanPromptAnsi {
     param([AllowNull()][string] $Text)
     if ($null -eq $Text) { return '' }
-    $script:__LeanPromptAnsiRegex.Replace($Text, '')
+    $global:__LeanPromptAnsiRegex.Replace($Text, '')
 }
 
 function global:Get-LeanPromptDisplayWidth {
@@ -161,7 +161,7 @@ function global:Limit-LeanPromptDisplayWidth {
     $result = [System.Text.StringBuilder]::new()
     $width = 0
     for ($index = 0; $index -lt $Text.Length;) {
-        $ansi = $script:__LeanPromptAnsiRegex.Match($Text, $index)
+        $ansi = $global:__LeanPromptAnsiRegex.Match($Text, $index)
         if ($ansi.Success -and $ansi.Index -eq $index) {
             $null = $result.Append($ansi.Value)
             $index += $ansi.Length
@@ -176,19 +176,19 @@ function global:Limit-LeanPromptDisplayWidth {
         $index += $element.Length
     }
 
-    $result.ToString() + $ellipsis + $script:LeanPromptPalette.Reset
+    $result.ToString() + $ellipsis + $global:LeanPromptPalette.Reset
 }
 
 function global:Format-LeanPromptLeftSegment {
     param(
         [AllowNull()][string] $Text,
-        [string] $Foreground = $script:LeanPromptPalette.SegmentText,
+        [string] $Foreground = $global:LeanPromptPalette.SegmentText,
         [switch] $Continue
     )
 
     if ([string]::IsNullOrWhiteSpace((Remove-LeanPromptAnsi $Text))) { return '' }
 
-    $palette = $script:LeanPromptPalette
+    $palette = $global:LeanPromptPalette
     $symbols = Get-LeanPromptSymbols
     if ($Continue) {
         return "$($palette.SegmentBg)$Foreground $Text $($palette.PathMuted)$($symbols.PathContinueSeparator)"
@@ -200,12 +200,12 @@ function global:Format-LeanPromptLeftSegment {
 function global:Format-LeanPromptRightSegment {
     param(
         [AllowNull()][string] $Text,
-        [string] $Foreground = $script:LeanPromptPalette.SegmentText
+        [string] $Foreground = $global:LeanPromptPalette.SegmentText
     )
 
     if ([string]::IsNullOrWhiteSpace((Remove-LeanPromptAnsi $Text))) { return '' }
 
-    $palette = $script:LeanPromptPalette
+    $palette = $global:LeanPromptPalette
     $symbols = Get-LeanPromptSymbols
     "$($palette.SegmentSeparator)$($symbols.RightSegmentSeparator)$($palette.SegmentBg)$Foreground $Text $($palette.Reset)"
 }
@@ -226,11 +226,11 @@ function global:Join-LeanPromptAlignedLine {
     $usableWidth = [Math]::Max(0, $WindowWidth - 1)
     $Left = Limit-LeanPromptDisplayWidth -Text $Left -MaxWidth $usableWidth
     if ([string]::IsNullOrWhiteSpace((Remove-LeanPromptAnsi $Right)) -or
-        $WindowWidth -lt $script:__LeanPromptRightMinWidth) { return $Left }
+        $WindowWidth -lt $global:__LeanPromptRightMinWidth) { return $Left }
 
     $leftWidth = Get-LeanPromptDisplayWidth $Left
     $rightWidth = Get-LeanPromptDisplayWidth $Right
-    if (($leftWidth + $script:__LeanPromptRightGapCells + $rightWidth) -gt $usableWidth) { return $Left }
+    if (($leftWidth + $global:__LeanPromptRightGapCells + $rightWidth) -gt $usableWidth) { return $Left }
 
     $rightColumn = $usableWidth - $rightWidth + 1
     $Left + "`e[$rightColumn`G" + $Right
@@ -290,13 +290,13 @@ function global:Get-LeanPromptProjectRoot {
     param([Parameter(Mandatory)][string] $Path)
 
     $now = [datetime]::UtcNow
-    if ($script:__LeanPromptProjectRootCache.ContainsKey($Path)) {
-        $cached = $script:__LeanPromptProjectRootCache[$Path]
+    if ($global:__LeanPromptProjectRootCache.ContainsKey($Path)) {
+        $cached = $global:__LeanPromptProjectRootCache[$Path]
         if ($cached.ExpiresUtc -gt $now) {
             if ($cached.Root) { return $cached.Root }
             return $null
         }
-        $script:__LeanPromptProjectRootCache.Remove($Path)
+        $global:__LeanPromptProjectRootCache.Remove($Path)
     }
 
     try {
@@ -311,15 +311,15 @@ function global:Get-LeanPromptProjectRoot {
     catch { return $null }
 
     $visited = [System.Collections.Generic.List[string]]::new()
-    $expiresUtc = $now.AddSeconds($script:__LeanPromptProjectRootCacheTtlSeconds)
+    $expiresUtc = $now.AddSeconds($global:__LeanPromptProjectRootCacheTtlSeconds)
     for ($depth = 0; $dir -and $depth -lt 8; $depth++) {
         $visited.Add($dir.FullName)
         if (Test-LeanPromptProjectMarker -Path $dir.FullName) {
             $entry = [pscustomobject]@{ Root = $dir.FullName; ExpiresUtc = $expiresUtc }
             foreach ($visitedPath in $visited) {
-                $script:__LeanPromptProjectRootCache[$visitedPath] = $entry
+                $global:__LeanPromptProjectRootCache[$visitedPath] = $entry
             }
-            $script:__LeanPromptProjectRootCache[$Path] = $entry
+            $global:__LeanPromptProjectRootCache[$Path] = $entry
             return $dir.FullName
         }
         $dir = $dir.Parent
@@ -327,9 +327,9 @@ function global:Get-LeanPromptProjectRoot {
 
     $entry = [pscustomobject]@{ Root = ''; ExpiresUtc = $expiresUtc }
     foreach ($visitedPath in $visited) {
-        $script:__LeanPromptProjectRootCache[$visitedPath] = $entry
+        $global:__LeanPromptProjectRootCache[$visitedPath] = $entry
     }
-    $script:__LeanPromptProjectRootCache[$Path] = $entry
+    $global:__LeanPromptProjectRootCache[$Path] = $entry
     $null
 }
 
@@ -362,7 +362,7 @@ function global:Compress-LeanPromptRelativePath {
 function global:Colorize-LeanPromptPath {
     param([Parameter(Mandatory)][string] $Display)
 
-    $palette = $script:LeanPromptPalette
+    $palette = $global:LeanPromptPalette
     $idx = $Display.LastIndexOf('/')
     if ($idx -lt 0) { return $palette.PathAnchor + $Display }
 
@@ -373,7 +373,7 @@ function global:Get-LeanPromptPath {
     param([switch] $Continue)
     $location = Get-Location
     if ($location.Provider.Name -ne 'FileSystem') {
-        return Format-LeanPromptLeftSegment -Text ($script:LeanPromptPalette.PathAnchor + [string]$location) -Foreground $script:LeanPromptPalette.Path -Continue:$Continue
+        return Format-LeanPromptLeftSegment -Text ($global:LeanPromptPalette.PathAnchor + [string]$location) -Foreground $global:LeanPromptPalette.Path -Continue:$Continue
     }
 
     $path = $location.ProviderPath
@@ -411,12 +411,12 @@ function global:Get-LeanPromptPath {
     try {
         $item = Get-Item -LiteralPath $location.ProviderPath -Force -ErrorAction Stop
         if ($item.Attributes -band [System.IO.FileAttributes]::ReadOnly) {
-            $colored += " $($script:LeanPromptPalette.GitModified)$($symbols.ReadOnly)"
+            $colored += " $($global:LeanPromptPalette.GitModified)$($symbols.ReadOnly)"
         }
     }
     catch { }
 
-    Format-LeanPromptLeftSegment -Text $colored -Foreground $script:LeanPromptPalette.Path -Continue:$Continue
+    Format-LeanPromptLeftSegment -Text $colored -Foreground $global:LeanPromptPalette.Path -Continue:$Continue
 }
 
 function global:Format-LeanPromptCommandDurationText {
@@ -424,7 +424,7 @@ function global:Format-LeanPromptCommandDurationText {
 
     if ($Duration.TotalSeconds -lt 2) { return '' }
 
-    $palette = $script:LeanPromptPalette
+    $palette = $global:LeanPromptPalette
     $color = if ($Duration.TotalSeconds -ge 60) { $palette.DurationVerySlow }
         elseif ($Duration.TotalSeconds -ge 10) { $palette.DurationSlow }
         else { $palette.DurationNormal }
@@ -440,10 +440,10 @@ function global:Format-LeanPromptCommandDurationText {
 }
 
 function global:Get-LeanPromptCommandDurationText {
-    if (-not $script:__LeanPromptDurationEnabled -or -not $script:__LeanPromptCommandStartUtc) { return '' }
+    if (-not $global:__LeanPromptDurationEnabled -or -not $global:__LeanPromptCommandStartUtc) { return '' }
 
-    $duration = [datetime]::UtcNow - $script:__LeanPromptCommandStartUtc
-    $script:__LeanPromptCommandStartUtc = $null
+    $duration = [datetime]::UtcNow - $global:__LeanPromptCommandStartUtc
+    $global:__LeanPromptCommandStartUtc = $null
     Format-LeanPromptCommandDurationText -Duration $duration
 }
 
@@ -475,37 +475,37 @@ function global:Start-ProfileBackgroundPowerShell {
 # >>> async git status prompt >>>
 # Starship built-in git_status and language modules scan synchronously; use a per-session worker so stale status never masquerades as current.
 if (Test-Path function:\Disable-LeanPromptAsyncRedraw) { Disable-LeanPromptAsyncRedraw }
-$script:__AsyncGitStatusSessionId = [guid]::NewGuid().ToString('N')
-$script:__AsyncGitStatusCacheDir = Join-Path $env:LOCALAPPDATA "PowerShell\ProfileCache\AsyncGitStatus\$($script:__AsyncGitStatusSessionId)"
-$script:__AsyncGitStatusUpdater = Join-Path $PSScriptRoot 'prompt-updaters\Update-AsyncGitStatus.ps1'
-$script:__AsyncGitStatusLockSeconds = 30
-$script:__AsyncGitStatusRequestQueue = $null
-$script:__AsyncGitStatusWorkerPowerShell = $null
-$script:__AsyncGitStatusWorkerAsyncResult = $null
-$script:__AsyncGitStatusMemoryPath = $null
-$script:__AsyncGitStatusMemoryCachePath = $null
-$script:__AsyncGitStatusMemoryLastWriteTimeUtc = [datetime]::MinValue
-$script:__AsyncGitStatusMemoryExpiresUtc = [datetime]::MinValue
-$script:__AsyncGitStatusMemoryText = ''
-$script:__LeanPromptGitLastPath = $null
-$script:__LeanPromptGitGeneration = 0L
-$script:__LeanPromptGitRequestedPath = $null
-$script:__LeanPromptGitRequestedGeneration = -1L
-$script:__LeanPromptGitCompletedPath = $null
-$script:__LeanPromptGitCompletedGeneration = -1L
-$script:__LeanPromptGitBranchRefreshPending = $false
-$script:__LeanPromptGitBranchOverride = $null
-$script:__LeanPromptAsyncGitRedrawState = [hashtable]::Synchronized(@{
+$global:__AsyncGitStatusSessionId = [guid]::NewGuid().ToString('N')
+$global:__AsyncGitStatusCacheDir = Join-Path $env:LOCALAPPDATA "PowerShell\ProfileCache\AsyncGitStatus\$($global:__AsyncGitStatusSessionId)"
+$global:__AsyncGitStatusUpdater = Join-Path $PSScriptRoot 'prompt-updaters\Update-AsyncGitStatus.ps1'
+$global:__AsyncGitStatusLockSeconds = 30
+$global:__AsyncGitStatusRequestQueue = $null
+$global:__AsyncGitStatusWorkerPowerShell = $null
+$global:__AsyncGitStatusWorkerAsyncResult = $null
+$global:__AsyncGitStatusMemoryPath = $null
+$global:__AsyncGitStatusMemoryCachePath = $null
+$global:__AsyncGitStatusMemoryLastWriteTimeUtc = [datetime]::MinValue
+$global:__AsyncGitStatusMemoryExpiresUtc = [datetime]::MinValue
+$global:__AsyncGitStatusMemoryText = ''
+$global:__LeanPromptGitLastPath = $null
+$global:__LeanPromptGitGeneration = 0L
+$global:__LeanPromptGitRequestedPath = $null
+$global:__LeanPromptGitRequestedGeneration = -1L
+$global:__LeanPromptGitCompletedPath = $null
+$global:__LeanPromptGitCompletedGeneration = -1L
+$global:__LeanPromptGitBranchRefreshPending = $false
+$global:__LeanPromptGitBranchOverride = $null
+$global:__LeanPromptAsyncGitRedrawState = [hashtable]::Synchronized(@{
     CachePath = ''
     LastUtc = [datetime]::MinValue
 })
-$script:__LeanPromptAsyncGitRedrawSourceId = "LeanPrompt.AsyncGitStatus.Redraw.$($script:__AsyncGitStatusSessionId)"
-$script:__LeanPromptAsyncGitRedrawWatcher = $null
-$script:__LeanPromptAsyncToolchainRedrawState = [hashtable]::Synchronized(@{
+$global:__LeanPromptAsyncGitRedrawSourceId = "LeanPrompt.AsyncGitStatus.Redraw.$($global:__AsyncGitStatusSessionId)"
+$global:__LeanPromptAsyncGitRedrawWatcher = $null
+$global:__LeanPromptAsyncToolchainRedrawState = [hashtable]::Synchronized(@{
     CachePath = ''
     LastUtc = [datetime]::MinValue
 })
-$script:__LeanPromptAsyncRedrawDispatchState = [hashtable]::Synchronized(@{
+$global:__LeanPromptAsyncRedrawDispatchState = [hashtable]::Synchronized(@{
     LastUtc = [datetime]::MinValue
     Count = 0L
     Pending = $false
@@ -515,19 +515,19 @@ $script:__LeanPromptAsyncRedrawDispatchState = [hashtable]::Synchronized(@{
     QueuedKeys = $null
     PromptCompletedUtc = [datetime]::MinValue
 })
-$script:__LeanPromptAsyncToolchainRedrawWatcher = $null
-$script:__LeanPromptAsyncRedrawTimer = $null
-$script:__LeanPromptAsyncGitExitSubscriptionId = $null
-$script:__LeanPromptAsyncGitExitJobId = $null
-$script:__AsyncToolchainStatusCacheDir = Join-Path $env:LOCALAPPDATA 'PowerShell\ProfileCache\AsyncToolchainStatus'
-$script:__AsyncToolchainStatusUpdater = Join-Path $PSScriptRoot 'prompt-updaters\Update-AsyncToolchainStatus.ps1'
-$script:__AsyncToolchainStatusTtlSeconds = 30
-$script:__AsyncToolchainStatusLockSeconds = 30
-$script:__AsyncToolchainStatusMemoryPath = $null
-$script:__AsyncToolchainStatusMemoryCachePath = $null
-$script:__AsyncToolchainStatusMemoryLastWriteTimeUtc = [datetime]::MinValue
-$script:__AsyncToolchainStatusMemoryExpiresUtc = [datetime]::MinValue
-$script:__AsyncToolchainStatusMemoryText = ''
+$global:__LeanPromptAsyncToolchainRedrawWatcher = $null
+$global:__LeanPromptAsyncRedrawTimer = $null
+$global:__LeanPromptAsyncGitExitSubscriptionId = $null
+$global:__LeanPromptAsyncGitExitJobId = $null
+$global:__AsyncToolchainStatusCacheDir = Join-Path $env:LOCALAPPDATA 'PowerShell\ProfileCache\AsyncToolchainStatus'
+$global:__AsyncToolchainStatusUpdater = Join-Path $PSScriptRoot 'prompt-updaters\Update-AsyncToolchainStatus.ps1'
+$global:__AsyncToolchainStatusTtlSeconds = 30
+$global:__AsyncToolchainStatusLockSeconds = 30
+$global:__AsyncToolchainStatusMemoryPath = $null
+$global:__AsyncToolchainStatusMemoryCachePath = $null
+$global:__AsyncToolchainStatusMemoryLastWriteTimeUtc = [datetime]::MinValue
+$global:__AsyncToolchainStatusMemoryExpiresUtc = [datetime]::MinValue
+$global:__AsyncToolchainStatusMemoryText = ''
 
 function global:Get-AsyncStatusKey {
     param([Parameter(Mandatory)][string] $Path)
@@ -590,25 +590,25 @@ function global:Start-AsyncStatusRefresh {
     }
 }
 function global:Stop-LeanPromptGitWorker {
-    $queue = $script:__AsyncGitStatusRequestQueue
-    $worker = $script:__AsyncGitStatusWorkerPowerShell
+    $queue = $global:__AsyncGitStatusRequestQueue
+    $worker = $global:__AsyncGitStatusWorkerPowerShell
     try { if ($queue -and -not $queue.IsAddingCompleted) { $queue.CompleteAdding() } } catch {}
     try {
-        if ($worker -and $script:__AsyncGitStatusWorkerAsyncResult -and -not $script:__AsyncGitStatusWorkerAsyncResult.IsCompleted) {
+        if ($worker -and $global:__AsyncGitStatusWorkerAsyncResult -and -not $global:__AsyncGitStatusWorkerAsyncResult.IsCompleted) {
             $worker.BeginStop($null, $null) | Out-Null
         }
     }
     catch {}
     try { if ($worker) { $worker.Dispose() } } catch {}
     try { if ($queue) { $queue.Dispose() } } catch {}
-    $script:__AsyncGitStatusRequestQueue = $null
-    $script:__AsyncGitStatusWorkerPowerShell = $null
-    $script:__AsyncGitStatusWorkerAsyncResult = $null
+    $global:__AsyncGitStatusRequestQueue = $null
+    $global:__AsyncGitStatusWorkerPowerShell = $null
+    $global:__AsyncGitStatusWorkerAsyncResult = $null
 }
 
 function global:Start-LeanPromptGitWorker {
-    if ($script:__AsyncGitStatusWorkerPowerShell -and $script:__AsyncGitStatusWorkerAsyncResult -and
-        -not $script:__AsyncGitStatusWorkerAsyncResult.IsCompleted) { return $true }
+    if ($global:__AsyncGitStatusWorkerPowerShell -and $global:__AsyncGitStatusWorkerAsyncResult -and
+        -not $global:__AsyncGitStatusWorkerAsyncResult.IsCompleted) { return $true }
 
     Stop-LeanPromptGitWorker
     Enable-LeanPromptAsyncRedraw
@@ -617,12 +617,12 @@ function global:Start-LeanPromptGitWorker {
     try {
         $queue = [System.Collections.Concurrent.BlockingCollection[object]]::new(1)
         $worker = [powershell]::Create()
-        $null = $worker.AddCommand($script:__AsyncGitStatusUpdater).AddParameter('RequestQueue', $queue)
+        $null = $worker.AddCommand($global:__AsyncGitStatusUpdater).AddParameter('RequestQueue', $queue)
         $asyncResult = $worker.BeginInvoke()
         if ($asyncResult.IsCompleted) { throw 'Git prompt worker stopped during startup.' }
-        $script:__AsyncGitStatusRequestQueue = $queue
-        $script:__AsyncGitStatusWorkerPowerShell = $worker
-        $script:__AsyncGitStatusWorkerAsyncResult = $asyncResult
+        $global:__AsyncGitStatusRequestQueue = $queue
+        $global:__AsyncGitStatusWorkerPowerShell = $worker
+        $global:__AsyncGitStatusWorkerAsyncResult = $asyncResult
         $true
     }
     catch {
@@ -635,40 +635,40 @@ function global:Start-LeanPromptGitWorker {
 function global:Start-AsyncGitStatusRefresh {
     param([Parameter(Mandatory)][string] $Path, [Parameter(Mandatory)][string] $CachePath, [Parameter(Mandatory)][string] $LockPath)
 
-    $generation = [long]$script:__LeanPromptGitGeneration
-    if ($script:__LeanPromptGitRequestedGeneration -eq $generation -and
-        $script:__LeanPromptGitRequestedPath -and
-        $script:__LeanPromptGitRequestedPath.Equals($Path, [System.StringComparison]::OrdinalIgnoreCase)) {
-        if (-not $script:__PwshProfileIsInteractive -or
-            ($script:__AsyncGitStatusWorkerAsyncResult -and -not $script:__AsyncGitStatusWorkerAsyncResult.IsCompleted)) { return }
-        $script:__LeanPromptGitRequestedGeneration = -1L
+    $generation = [long]$global:__LeanPromptGitGeneration
+    if ($global:__LeanPromptGitRequestedGeneration -eq $generation -and
+        $global:__LeanPromptGitRequestedPath -and
+        $global:__LeanPromptGitRequestedPath.Equals($Path, [System.StringComparison]::OrdinalIgnoreCase)) {
+        if (-not $global:__PwshProfileIsInteractive -or
+            ($global:__AsyncGitStatusWorkerAsyncResult -and -not $global:__AsyncGitStatusWorkerAsyncResult.IsCompleted)) { return }
+        $global:__LeanPromptGitRequestedGeneration = -1L
     }
 
-    if ($script:__PwshProfileIsInteractive -and (Start-LeanPromptGitWorker)) {
+    if ($global:__PwshProfileIsInteractive -and (Start-LeanPromptGitWorker)) {
         $request = [pscustomobject]@{
             Cwd = $Path
             CachePath = $CachePath
-            SessionId = $script:__AsyncGitStatusSessionId
+            SessionId = $global:__AsyncGitStatusSessionId
             Generation = $generation
         }
         try {
-            if (-not $script:__AsyncGitStatusRequestQueue.TryAdd($request)) {
+            if (-not $global:__AsyncGitStatusRequestQueue.TryAdd($request)) {
                 $dropped = $null
-                $null = $script:__AsyncGitStatusRequestQueue.TryTake([ref]$dropped)
-                if (-not $script:__AsyncGitStatusRequestQueue.TryAdd($request)) { return }
+                $null = $global:__AsyncGitStatusRequestQueue.TryTake([ref]$dropped)
+                if (-not $global:__AsyncGitStatusRequestQueue.TryAdd($request)) { return }
             }
-            $script:__LeanPromptGitRequestedPath = $Path
-            $script:__LeanPromptGitRequestedGeneration = $generation
+            $global:__LeanPromptGitRequestedPath = $Path
+            $global:__LeanPromptGitRequestedGeneration = $generation
             return
         }
         catch { Stop-LeanPromptGitWorker }
     }
 
     Start-AsyncStatusRefresh -Path $Path -CachePath $CachePath -LockPath $LockPath `
-        -UpdaterPath $script:__AsyncGitStatusUpdater -LockSeconds $script:__AsyncGitStatusLockSeconds `
-        -UpdaterArguments @('-SessionId', $script:__AsyncGitStatusSessionId, '-Generation', [string]$generation)
-    $script:__LeanPromptGitRequestedPath = $Path
-    $script:__LeanPromptGitRequestedGeneration = $generation
+        -UpdaterPath $global:__AsyncGitStatusUpdater -LockSeconds $global:__AsyncGitStatusLockSeconds `
+        -UpdaterArguments @('-SessionId', $global:__AsyncGitStatusSessionId, '-Generation', [string]$generation)
+    $global:__LeanPromptGitRequestedPath = $Path
+    $global:__LeanPromptGitRequestedGeneration = $generation
 }
 
 function global:Get-LeanPromptGitBranch {
@@ -695,7 +695,7 @@ function global:Get-LeanPromptGitBranch {
 
 function global:Start-AsyncToolchainStatusRefresh {
     param([Parameter(Mandatory)][string] $Path, [Parameter(Mandatory)][string] $CachePath, [Parameter(Mandatory)][string] $LockPath)
-    Start-AsyncStatusRefresh -Path $Path -CachePath $CachePath -LockPath $LockPath -UpdaterPath $script:__AsyncToolchainStatusUpdater -LockSeconds $script:__AsyncToolchainStatusLockSeconds
+    Start-AsyncStatusRefresh -Path $Path -CachePath $CachePath -LockPath $LockPath -UpdaterPath $global:__AsyncToolchainStatusUpdater -LockSeconds $global:__AsyncToolchainStatusLockSeconds
 }
 
 function global:Get-AsyncCachedStatusText {
@@ -778,7 +778,7 @@ function global:Format-LeanPromptGitStatusText {
         [AllowNull()][string] $Branch
     )
 
-    $palette = $script:LeanPromptPalette
+    $palette = $global:LeanPromptPalette
     $symbols = Get-LeanPromptSymbols
     $parts = @()
 
@@ -834,7 +834,7 @@ function global:Limit-LeanPromptGitStatusWidth {
     $currentWidth = Get-LeanPromptDisplayWidth $Text
     if ([string]::IsNullOrEmpty($Text) -or $MaxWidth -le 0 -or $currentWidth -le $MaxWidth) { return $Text }
 
-    $palette = $script:LeanPromptPalette
+    $palette = $global:LeanPromptPalette
     $symbols = Get-LeanPromptSymbols
     $branchPrefix = "$($palette.GitBranch)$($symbols.GitBranch) "
     $branchStart = $Text.IndexOf($branchPrefix, [System.StringComparison]::Ordinal)
@@ -866,7 +866,7 @@ function global:Format-LeanPromptGitToken {
         [Parameter(Mandatory)][string] $Text
     )
 
-    $Color + $Text + $script:LeanPromptPalette.GitText
+    $Color + $Text + $global:LeanPromptPalette.GitText
 }
 
 function global:Format-LeanPromptGitCount {
@@ -888,29 +888,29 @@ function global:Get-AsyncGitStatusText {
 
     $cwd = $location.ProviderPath
     $key = Get-AsyncStatusKey -Path $cwd
-    $cachePath = Join-Path $script:__AsyncGitStatusCacheDir "$key.json"
-    $lockPath = Join-Path $script:__AsyncGitStatusCacheDir "$key.lock"
-    $script:__LeanPromptAsyncGitRedrawState.CachePath = $cachePath
+    $cachePath = Join-Path $global:__AsyncGitStatusCacheDir "$key.json"
+    $lockPath = Join-Path $global:__AsyncGitStatusCacheDir "$key.lock"
+    $global:__LeanPromptAsyncGitRedrawState.CachePath = $cachePath
     $forceRefresh = $false
-    $pathChanged = $script:__LeanPromptGitLastPath -and
-        -not $script:__LeanPromptGitLastPath.Equals($cwd, [System.StringComparison]::OrdinalIgnoreCase)
-    $script:__LeanPromptGitLastPath = $cwd
+    $pathChanged = $global:__LeanPromptGitLastPath -and
+        -not $global:__LeanPromptGitLastPath.Equals($cwd, [System.StringComparison]::OrdinalIgnoreCase)
+    $global:__LeanPromptGitLastPath = $cwd
 
-    if ($script:__LeanPromptGitBranchRefreshPending -or $pathChanged) {
-        $script:__LeanPromptGitBranchRefreshPending = $false
+    if ($global:__LeanPromptGitBranchRefreshPending -or $pathChanged) {
+        $global:__LeanPromptGitBranchRefreshPending = $false
         $forceRefresh = $true
         $cacheItem = Get-Item -LiteralPath $cachePath -ErrorAction SilentlyContinue
-        $script:__LeanPromptGitBranchOverride = [pscustomobject]@{
+        $global:__LeanPromptGitBranchOverride = [pscustomobject]@{
             Path = $cwd
             Branch = Get-LeanPromptGitBranch -Path $cwd
             CacheLastWriteTimeUtc = if ($cacheItem) { $cacheItem.LastWriteTimeUtc } else { [datetime]::MinValue }
         }
-        $script:__AsyncGitStatusMemoryLastWriteTimeUtc = [datetime]::MinValue
+        $global:__AsyncGitStatusMemoryLastWriteTimeUtc = [datetime]::MinValue
     }
 
-    $generation = [long]$script:__LeanPromptGitGeneration
-    $sessionId = [string]$script:__AsyncGitStatusSessionId
-    $text = Get-AsyncCachedStatusText -Kind 'Git' -CacheDir $script:__AsyncGitStatusCacheDir -TtlSeconds 0 `
+    $generation = [long]$global:__LeanPromptGitGeneration
+    $sessionId = [string]$global:__AsyncGitStatusSessionId
+    $text = Get-AsyncCachedStatusText -Kind 'Git' -CacheDir $global:__AsyncGitStatusCacheDir -TtlSeconds 0 `
         -NegativeTtlSeconds 5 -NegativeProperty 'IsRepo' `
         -Formatter {
             param($status, [datetime]$cacheLastWriteTimeUtc)
@@ -922,15 +922,15 @@ function global:Get-AsyncGitStatusText {
             $isFresh = $statusSession -and $statusGeneration -and
                 [string]$statusSession.Value -ceq $sessionId -and [long]$statusGeneration.Value -eq $generation
             if ($isFresh) {
-                $script:__LeanPromptGitCompletedPath = [string]$status.Path
-                $script:__LeanPromptGitCompletedGeneration = $generation
+                $global:__LeanPromptGitCompletedPath = [string]$status.Path
+                $global:__LeanPromptGitCompletedGeneration = $generation
             }
-            elseif ($script:__LeanPromptGitCompletedGeneration -eq $generation -and
-                $script:__LeanPromptGitCompletedPath -and
-                $script:__LeanPromptGitCompletedPath.Equals([string]$status.Path, [System.StringComparison]::OrdinalIgnoreCase)) {
-                $script:__LeanPromptGitRequestedGeneration = -1L
+            elseif ($global:__LeanPromptGitCompletedGeneration -eq $generation -and
+                $global:__LeanPromptGitCompletedPath -and
+                $global:__LeanPromptGitCompletedPath.Equals([string]$status.Path, [System.StringComparison]::OrdinalIgnoreCase)) {
+                $global:__LeanPromptGitRequestedGeneration = -1L
             }
-            $override = $script:__LeanPromptGitBranchOverride
+            $override = $global:__LeanPromptGitBranchOverride
             if ($override -and $override.Path.Equals([string]$status.Path, [System.StringComparison]::OrdinalIgnoreCase)) {
                 $branch = [string]$override.Branch
                 if ([string]$status.Branch -cne $branch -and $override.CacheLastWriteTimeUtc -ne $cacheLastWriteTimeUtc) {
@@ -939,7 +939,7 @@ function global:Get-AsyncGitStatusText {
                     $override.CacheLastWriteTimeUtc = $cacheLastWriteTimeUtc
                 }
                 if ([string]$status.Branch -ceq $branch) {
-                    $script:__LeanPromptGitBranchOverride = $null
+                    $global:__LeanPromptGitBranchOverride = $null
                 }
                 else {
                     $displayStatus = $null
@@ -950,7 +950,7 @@ function global:Get-AsyncGitStatusText {
         } `
         -Refresh { param($path, $cachePath, $lockPath) Start-AsyncGitStatusRefresh -Path $path -CachePath $cachePath -LockPath $lockPath }
 
-    $override = $script:__LeanPromptGitBranchOverride
+    $override = $global:__LeanPromptGitBranchOverride
     $overrideApplies = $override -and $override.Path.Equals($cwd, [System.StringComparison]::OrdinalIgnoreCase)
     if ([string]::IsNullOrEmpty($text) -and $overrideApplies) {
         $text = Format-LeanPromptGitStatusText -Status $null -Branch $override.Branch
@@ -962,7 +962,7 @@ function global:Format-ToolchainStatusText {
     param([string] $Text)
     if ([string]::IsNullOrWhiteSpace($Text)) { return '' }
 
-    $palette = $script:LeanPromptPalette
+    $palette = $global:LeanPromptPalette
     $symbols = Get-LeanPromptSymbols
     $styles = @{
         'node' = @{ Symbol = 'Node'; Color = $palette.Node }
@@ -988,19 +988,19 @@ function global:Format-ToolchainStatusText {
 function global:Get-AsyncToolchainStatusText {
     $location = Get-Location
     if ($location.Provider.Name -ne 'FileSystem') {
-        $script:__LeanPromptAsyncToolchainRedrawState.CachePath = ''
+        $global:__LeanPromptAsyncToolchainRedrawState.CachePath = ''
         return ''
     }
 
     $projectRoot = Get-LeanPromptProjectRoot -Path $location.ProviderPath
     if (-not $projectRoot) {
-        $script:__LeanPromptAsyncToolchainRedrawState.CachePath = ''
+        $global:__LeanPromptAsyncToolchainRedrawState.CachePath = ''
         return ''
     }
 
     $key = Get-AsyncStatusKey -Path $projectRoot
-    $script:__LeanPromptAsyncToolchainRedrawState.CachePath = Join-Path $script:__AsyncToolchainStatusCacheDir "$key.json"
-    Get-AsyncCachedStatusText -Kind 'Toolchain' -CacheDir $script:__AsyncToolchainStatusCacheDir -TtlSeconds $script:__AsyncToolchainStatusTtlSeconds `
+    $global:__LeanPromptAsyncToolchainRedrawState.CachePath = Join-Path $global:__AsyncToolchainStatusCacheDir "$key.json"
+    Get-AsyncCachedStatusText -Kind 'Toolchain' -CacheDir $global:__AsyncToolchainStatusCacheDir -TtlSeconds $global:__AsyncToolchainStatusTtlSeconds `
         -NegativeTtlSeconds 120 -NegativeProperty 'IsProject' `
         -Formatter { param($status) Format-ToolchainStatusText $status.Text } `
         -Refresh { param($cwd, $cachePath, $lockPath) Start-AsyncToolchainStatusRefresh -Path $cwd -CachePath $cachePath -LockPath $lockPath } `
@@ -1009,28 +1009,28 @@ function global:Get-AsyncToolchainStatusText {
 function global:prompt {
     $pipelineSucceeded = $?
     $lastExitCode = $global:LASTEXITCODE
-    $redrawState = $script:__LeanPromptAsyncRedrawDispatchState
-    if ($script:__LeanPromptAsyncRedrawTimer) {
-        $script:__LeanPromptAsyncRedrawTimer.Stop()
+    $redrawState = $global:__LeanPromptAsyncRedrawDispatchState
+    if ($global:__LeanPromptAsyncRedrawTimer) {
+        $global:__LeanPromptAsyncRedrawTimer.Stop()
         $redrawState.Pending = $false
         $redrawState.InputActive = $false
         $redrawState.Rendering = $true
     }
     try {
-        $lastCommandSucceeded = if ($null -ne $script:__LeanPromptStatusOverride) {
-            [bool]$script:__LeanPromptStatusOverride
+        $lastCommandSucceeded = if ($null -ne $global:__LeanPromptStatusOverride) {
+            [bool]$global:__LeanPromptStatusOverride
         } else { $pipelineSucceeded }
         if (Test-Path function:\Update-FnmEnvironmentForPrompt) { Update-FnmEnvironmentForPrompt }
-        $palette = $script:LeanPromptPalette
+        $palette = $global:LeanPromptPalette
         $gitText = Get-AsyncGitStatusText
         $rightParts = @()
         $toolchainText = Get-AsyncToolchainStatusText
         if (-not [string]::IsNullOrWhiteSpace((Remove-LeanPromptAnsi $toolchainText))) {
-            $rightParts += (Format-LeanPromptRightSegment -Text $toolchainText -Foreground $script:LeanPromptPalette.Version)
+            $rightParts += (Format-LeanPromptRightSegment -Text $toolchainText -Foreground $global:LeanPromptPalette.Version)
         }
         $durationText = Get-LeanPromptCommandDurationText
         if (-not [string]::IsNullOrWhiteSpace((Remove-LeanPromptAnsi $durationText))) {
-            $rightParts += (Format-LeanPromptRightSegment -Text $durationText -Foreground $script:LeanPromptPalette.DurationNormal)
+            $rightParts += (Format-LeanPromptRightSegment -Text $durationText -Foreground $global:LeanPromptPalette.DurationNormal)
         }
         $rightText = $rightParts -join ''
 
@@ -1041,9 +1041,9 @@ function global:prompt {
         try { $windowWidth = $Host.UI.RawUI.WindowSize.Width } catch {}
         if ($hasGitText -and $windowWidth -gt 1) {
             $leftBudget = $windowWidth - 1
-            if ($windowWidth -ge $script:__LeanPromptRightMinWidth -and
+            if ($windowWidth -ge $global:__LeanPromptRightMinWidth -and
                 -not [string]::IsNullOrWhiteSpace((Remove-LeanPromptAnsi $rightText))) {
-                $rightBudget = $leftBudget - $script:__LeanPromptRightGapCells - (Get-LeanPromptDisplayWidth $rightText)
+                $rightBudget = $leftBudget - $global:__LeanPromptRightGapCells - (Get-LeanPromptDisplayWidth $rightText)
                 if ($rightBudget -gt 0) { $leftBudget = $rightBudget }
             }
             if ((Get-LeanPromptDisplayWidth $leftLine) -gt $leftBudget) {
@@ -1061,7 +1061,7 @@ function global:prompt {
         $promptText = "$firstLine`n$symbolColor$($symbols.PromptChar)$($palette.Reset) "
     }
     finally {
-        if ($script:__LeanPromptAsyncRedrawTimer) {
+        if ($global:__LeanPromptAsyncRedrawTimer) {
             $redrawState.Rendering = $false
             $redrawState.PromptCompletedUtc = [datetime]::UtcNow
             $redrawState.InputActive = $true
@@ -1070,7 +1070,7 @@ function global:prompt {
     $promptText
 }
 function global:Remove-LeanPromptGitCache {
-    $cacheDir = $script:__AsyncGitStatusCacheDir
+    $cacheDir = $global:__AsyncGitStatusCacheDir
     if (-not $cacheDir -or -not (Test-Path -LiteralPath $cacheDir)) { return }
 
     Get-ChildItem -LiteralPath $cacheDir -Force -File -ErrorAction SilentlyContinue |
@@ -1079,7 +1079,7 @@ function global:Remove-LeanPromptGitCache {
 }
 
 function global:Disable-LeanPromptAsyncRedraw {
-    $sourceId = $script:__LeanPromptAsyncGitRedrawSourceId
+    $sourceId = $global:__LeanPromptAsyncGitRedrawSourceId
     if ($sourceId) {
         Get-EventSubscriber -ErrorAction SilentlyContinue | Where-Object {
             $_.SourceIdentifier.StartsWith("$sourceId.", [System.StringComparison]::Ordinal)
@@ -1090,58 +1090,58 @@ function global:Disable-LeanPromptAsyncRedraw {
         }
     }
 
-    if ($script:__LeanPromptAsyncGitExitSubscriptionId) {
-        $exitSubscriber = Get-EventSubscriber -SubscriptionId $script:__LeanPromptAsyncGitExitSubscriptionId -ErrorAction SilentlyContinue
+    if ($global:__LeanPromptAsyncGitExitSubscriptionId) {
+        $exitSubscriber = Get-EventSubscriber -SubscriptionId $global:__LeanPromptAsyncGitExitSubscriptionId -ErrorAction SilentlyContinue
         if ($exitSubscriber) {
             $actionJob = $exitSubscriber.Action
             Unregister-Event -SubscriptionId $exitSubscriber.SubscriptionId -ErrorAction SilentlyContinue
             if ($actionJob) { Remove-Job -Job $actionJob -Force -ErrorAction SilentlyContinue }
         }
     }
-    if ($script:__LeanPromptAsyncGitExitJobId) {
-        Get-Job -Id $script:__LeanPromptAsyncGitExitJobId -ErrorAction SilentlyContinue |
+    if ($global:__LeanPromptAsyncGitExitJobId) {
+        Get-Job -Id $global:__LeanPromptAsyncGitExitJobId -ErrorAction SilentlyContinue |
             Remove-Job -Force -ErrorAction SilentlyContinue
     }
 
-    if ($script:__LeanPromptAsyncGitRedrawWatcher) {
-        try { $script:__LeanPromptAsyncGitRedrawWatcher.Dispose() } catch {}
-        $script:__LeanPromptAsyncGitRedrawWatcher = $null
+    if ($global:__LeanPromptAsyncGitRedrawWatcher) {
+        try { $global:__LeanPromptAsyncGitRedrawWatcher.Dispose() } catch {}
+        $global:__LeanPromptAsyncGitRedrawWatcher = $null
     }
-    if ($script:__LeanPromptAsyncToolchainRedrawWatcher) {
-        try { $script:__LeanPromptAsyncToolchainRedrawWatcher.Dispose() } catch {}
-        $script:__LeanPromptAsyncToolchainRedrawWatcher = $null
+    if ($global:__LeanPromptAsyncToolchainRedrawWatcher) {
+        try { $global:__LeanPromptAsyncToolchainRedrawWatcher.Dispose() } catch {}
+        $global:__LeanPromptAsyncToolchainRedrawWatcher = $null
     }
-    if ($script:__LeanPromptAsyncRedrawTimer) {
-        try { $script:__LeanPromptAsyncRedrawTimer.Dispose() } catch {}
-        $script:__LeanPromptAsyncRedrawTimer = $null
+    if ($global:__LeanPromptAsyncRedrawTimer) {
+        try { $global:__LeanPromptAsyncRedrawTimer.Dispose() } catch {}
+        $global:__LeanPromptAsyncRedrawTimer = $null
     }
 
     Stop-LeanPromptGitWorker
     Remove-LeanPromptGitCache
-    $script:__LeanPromptAsyncGitExitSubscriptionId = $null
-    $script:__LeanPromptAsyncGitExitJobId = $null
+    $global:__LeanPromptAsyncGitExitSubscriptionId = $null
+    $global:__LeanPromptAsyncGitExitJobId = $null
 }
 
 function global:Enable-LeanPromptAsyncRedraw {
-    if (-not $script:__PwshProfileIsInteractive -or
-        ($script:__LeanPromptAsyncGitRedrawWatcher -and $script:__LeanPromptAsyncToolchainRedrawWatcher -and
-            $script:__LeanPromptAsyncRedrawTimer)) { return }
+    if (-not $global:__PwshProfileIsInteractive -or
+        ($global:__LeanPromptAsyncGitRedrawWatcher -and $global:__LeanPromptAsyncToolchainRedrawWatcher -and
+            $global:__LeanPromptAsyncRedrawTimer)) { return }
 
     try { [Microsoft.PowerShell.PSConsoleReadLine] | Out-Null }
     catch { return }
 
     try {
-        New-Item -ItemType Directory -Force -Path $script:__AsyncGitStatusCacheDir -ErrorAction Stop | Out-Null
-        New-Item -ItemType Directory -Force -Path $script:__AsyncToolchainStatusCacheDir -ErrorAction Stop | Out-Null
+        New-Item -ItemType Directory -Force -Path $global:__AsyncGitStatusCacheDir -ErrorAction Stop | Out-Null
+        New-Item -ItemType Directory -Force -Path $global:__AsyncToolchainStatusCacheDir -ErrorAction Stop | Out-Null
 
         # ponytail: one short debounce timer is enough for the two cache watchers; split it only if redraw latency becomes visible.
         $timer = [System.Timers.Timer]::new(25)
         $timer.AutoReset = $false
-        $script:__LeanPromptAsyncRedrawTimer = $timer
+        $global:__LeanPromptAsyncRedrawTimer = $timer
         Register-ObjectEvent -InputObject $timer -EventName Elapsed `
-            -SourceIdentifier "$($script:__LeanPromptAsyncGitRedrawSourceId).Dispatch" `
+            -SourceIdentifier "$($global:__LeanPromptAsyncGitRedrawSourceId).Dispatch" `
             -MessageData ([pscustomobject]@{
-                    State = $script:__LeanPromptAsyncRedrawDispatchState
+                    State = $global:__LeanPromptAsyncRedrawDispatchState
                     Timer = $timer
                 }) -Action {
                 try {
@@ -1196,15 +1196,15 @@ function global:Enable-LeanPromptAsyncRedraw {
 
         foreach ($watcherConfig in @(
                 @{
-                    CacheDir = $script:__AsyncGitStatusCacheDir
-                    State = $script:__LeanPromptAsyncGitRedrawState
-                    Source = "$($script:__LeanPromptAsyncGitRedrawSourceId).Git.Renamed"
+                    CacheDir = $global:__AsyncGitStatusCacheDir
+                    State = $global:__LeanPromptAsyncGitRedrawState
+                    Source = "$($global:__LeanPromptAsyncGitRedrawSourceId).Git.Renamed"
                     Variable = '__LeanPromptAsyncGitRedrawWatcher'
                 }
                 @{
-                    CacheDir = $script:__AsyncToolchainStatusCacheDir
-                    State = $script:__LeanPromptAsyncToolchainRedrawState
-                    Source = "$($script:__LeanPromptAsyncGitRedrawSourceId).Toolchain.Renamed"
+                    CacheDir = $global:__AsyncToolchainStatusCacheDir
+                    State = $global:__LeanPromptAsyncToolchainRedrawState
+                    Source = "$($global:__LeanPromptAsyncGitRedrawSourceId).Toolchain.Renamed"
                     Variable = '__LeanPromptAsyncToolchainRedrawWatcher'
                 }
             )) {
@@ -1215,7 +1215,7 @@ function global:Enable-LeanPromptAsyncRedraw {
                 -SourceIdentifier $watcherConfig.Source `
                 -MessageData ([pscustomobject]@{
                         State = $watcherConfig.State
-                        Dispatch = $script:__LeanPromptAsyncRedrawDispatchState
+                        Dispatch = $global:__LeanPromptAsyncRedrawDispatchState
                         Timer = $timer
                     }) `
                 -Action $redrawAction | Out-Null
@@ -1228,8 +1228,8 @@ function global:Enable-LeanPromptAsyncRedraw {
         $exitSubscriber = Get-EventSubscriber -SourceIdentifier PowerShell.Exiting |
             Where-Object Action -EQ $exitJob |
             Select-Object -First 1
-        $script:__LeanPromptAsyncGitExitSubscriptionId = $exitSubscriber.SubscriptionId
-        $script:__LeanPromptAsyncGitExitJobId = $exitJob.Id
+        $global:__LeanPromptAsyncGitExitSubscriptionId = $exitSubscriber.SubscriptionId
+        $global:__LeanPromptAsyncGitExitJobId = $exitJob.Id
     }
     catch {
         Disable-LeanPromptAsyncRedraw
