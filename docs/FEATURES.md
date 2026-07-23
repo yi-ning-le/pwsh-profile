@@ -286,6 +286,8 @@ If `fnm` is installed, the profile discovers its executable once and maintains a
 
 In an interactive session, `fnm env --json --resolve-engines=false` starts in a hidden process while the rest of the profile continues loading. The returned environment is applied when ready. PATH entries are merged case-insensitively without duplicating entries that already existed when initialization began.
 
+In Codex-launched shells, only the `fnm env` child process uses `$env:TEMP` as `LOCALAPPDATA`, allowing its multishell junction to be created inside the Windows sandbox without changing the parent shell environment.
+
 The following commands are wrapped:
 
 - `node`

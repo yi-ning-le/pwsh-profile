@@ -1378,6 +1378,7 @@ exit 0
     Set-Content -LiteralPath (Join-Path $fakeFnmDir 'fnm.cmd') -Encoding ASCII -Value @(
         '@echo off'
         'echo %*>>"%PWSH_FNM_LOG%"'
+        'if /I "%~1"=="env" echo LOCALAPPDATA=%LOCALAPPDATA%>>"%PWSH_FNM_LOG%"'
         'if /I "%~1"=="env" echo {"FNM_MULTISHELL_PATH":"%PWSH_FNM_MULTISHELL%","PWSH_FNM_APPLIED":"true"}'
         'exit /b 0'
     )
@@ -1391,6 +1392,8 @@ exit 0
     $fnmSuccessScript = @'
 $ErrorActionPreference = 'Stop'
 $WarningPreference = 'Stop'
+$env:CODEX_SHELL = '1'
+$parentLocalAppData = $env:LOCALAPPDATA
 . $env:PWSH_PROFILE_SOURCE
 $module = Get-Module PwshProfile -ErrorAction Stop
 $fnmState = & $module { $script:State.Fnm }
@@ -1400,6 +1403,7 @@ $version = node --version
 if ($version -cne 'v99.0.0' -or $env:PWSH_FNM_APPLIED -cne 'true' -or $fnmState.Status -cne 'Ready') {
     throw 'node wrapper did not wait for and apply fnm JSON'
 }
+if ($env:LOCALAPPDATA -cne $parentLocalAppData) { throw 'fnm initialization changed parent LOCALAPPDATA' }
 $fnmState.Remove('SchemaVersion')
 . $env:PWSH_PROFILE_SOURCE
 $module = Get-Module PwshProfile -ErrorAction Stop
@@ -1413,7 +1417,8 @@ exit 0
     Invoke-PwshChecked -Name 'FnmSingleInitializationSmoke' -Arguments @('-NoLogo', '-NoProfile', '-Command', $fnmSuccessScript)
     $fnmCalls = @(Get-Content -LiteralPath $env:PWSH_FNM_LOG)
     if (@($fnmCalls | Where-Object { $_ -ceq 'env --json --resolve-engines=false' }).Count -ne 1 -or
-        @($fnmCalls | Where-Object { $_ -ceq 'node --version' }).Count -ne 1) {
+        @($fnmCalls | Where-Object { $_ -ceq 'node --version' }).Count -ne 1 -or
+        @($fnmCalls | Where-Object { $_ -ceq "LOCALAPPDATA=$env:TEMP" }).Count -ne 1) {
         throw "fnm initialization calls were invalid: [$($fnmCalls -join '; ')]"
     }
 

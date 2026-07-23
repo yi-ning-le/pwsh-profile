@@ -61,6 +61,11 @@ function Start-FnmEnvironmentInitialization {
         $psi.StandardOutputEncoding = [System.Text.Encoding]::UTF8
         $psi.StandardErrorEncoding = [System.Text.Encoding]::UTF8
 
+        # Codex's Windows sandbox can write TEMP but may deny LOCALAPPDATA.
+        if ($env:CODEX_SHELL -eq '1') {
+            $psi.Environment['LOCALAPPDATA'] = $env:TEMP
+        }
+
         $process = [System.Diagnostics.Process]::new()
         $process.StartInfo = $psi
         $script:State.Fnm.LaunchPath = $env:PATH
