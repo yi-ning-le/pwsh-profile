@@ -18,6 +18,7 @@ See [Feature Reference](docs/FEATURES.md) for a detailed description of runtime 
 - Zsh-style path completion: `/` only inserts a separator, Tab performs case-insensitive segment-prefix completion, directories end in `/`, and hidden entries require an explicit `.` prefix.
 - Carapace external command completion, prewarmed on the first interactive idle, plus status-aware git path completion.
 - `fnm` Node.js auto-switching with asynchronous interactive prewarming and on-demand fallback for `node`, `npm`, `npx`, `pnpm`, `yarn`, and `corepack`.
+- `jrun` keeps native commands in the current Windows console while a Job Object contains their process tree. The first Ctrl+C allows up to three seconds for graceful shutdown; a second Ctrl+C or the deadline terminates the tree and returns 130. `npm run` and `npm run-script` use it automatically.
 - Oh-my-zsh-style git aliases and directory navigation shortcuts.
 - Unix muscle-memory helpers such as `which`, `whereis`, `touch`, `mkcd`, `head`, `tail`, `export`, `env`, `open`, `df`, `refreshenv`, and `reload`.
 - Direct modern CLI wrappers:
@@ -31,15 +32,17 @@ See [Feature Reference](docs/FEATURES.md) for a detailed description of runtime 
 ```text
 profile/Microsoft.PowerShell_profile.ps1      entrypoint installed to $PROFILE.CurrentUserCurrentHost
 profile/profile.d/10-prompt.ps1              prompt, async cache orchestration, background process helper
+profile/profile.d/15-job-object.ps1          installed Rust helper discovery and jrun PowerShell wrapper
 profile/profile.d/20-node.ps1                fnm asynchronous environment initialization and Node wrappers
 profile/profile.d/25-icons.ps1               on-demand Terminal-Icons helper
 profile/profile.d/30-psreadline.ps1          PSReadLine options, keybindings, duration tracking
 profile/profile.d/40-completion.ps1          generic path routing, carapace cache, git path completion
 profile/profile.d/50-aliases.ps1             lsd/bat/rg wrappers, git aliases, navigation helpers
 profile/profile.d/60-utils.ps1               small Unix-style utility functions
+profile/profile.d/job-runner/                Rust/Win32 Job Object helper source
 profile/profile.d/prompt-updaters/*.ps1      async git/toolchain updater scripts
 scripts/install.ps1                          install/sync local profile files
-scripts/test-profile.ps1                     parser, policy, and startup benchmark checks
+scripts/test-profile.ps1                     parser, Rust/process integration, policy, and startup checks
 packages/winget.ps1                          optional dependency installer
 ```
 
@@ -169,6 +172,7 @@ which whereis touch mkcd head tail export env open xdg-open df refreshenv reload
 - ripgrep (`rg`)
 - fnm
 - carapace
+- Rust MSVC toolchain (`cargo`), used to compile `jrun` during installation and run its Rust tests during validation
 
 Optional:
 
@@ -184,7 +188,7 @@ cd pwsh-profile
 .\scripts\install.ps1
 ```
 
-The installer validates and stages `profile/Microsoft.PowerShell_profile.ps1` plus every `.ps1` file under `profile/profile.d`, then replaces the installed entry and `profile.d` as a mirrored unit. Same-volume directory renames keep `profile.d` replacement atomic, so a locked target file fails the install without partially moving the existing tree. Stale target scripts are removed from the active install. Existing entry and `profile.d` trees receive separate timestamped backups; backups are retained until you remove them.
+The installer validates the PowerShell entrypoint and parts, stages the entrypoint plus every file under `profile/profile.d`, builds the static Rust `jrun.exe` into the staged tree, then replaces the installed entry and `profile.d` as a mirrored unit. A Cargo or compiler failure occurs before the active profile is touched. Same-volume directory renames keep `profile.d` replacement atomic, so a locked target file fails the install without partially moving the existing tree. Stale target files are removed from the active install. Existing entry and `profile.d` trees receive separate timestamped backups; backups are retained until you remove them.
 
 To skip permanent backups (rollback protection is still used during installation):
 
@@ -198,7 +202,7 @@ To skip permanent backups (rollback protection is still used during installation
 .\packages\winget.ps1
 ```
 
-The winget script installs Git, lsd, bat, ripgrep, fnm, and Carapace using exact package IDs. It stops at the first failed package and reports its ID and native exit code. Review the package list before running it on a new machine.
+The winget script installs Git, lsd, bat, ripgrep, fnm, Carapace, and Rustup using exact package IDs. It stops at the first failed package and reports its ID and native exit code. Review the package list before running it on a new machine.
 
 ## Verify
 
@@ -210,13 +214,21 @@ The winget script installs Git, lsd, bat, ripgrep, fnm, and Carapace using exact
 .\scripts\test-profile.ps1 -InteractiveRuns 20
 ```
 
-The test script checks parser errors, policy regressions, isolated runtime smoke cases, and a small startup benchmark. It recursively parses the entry profile and every `.ps1` file under `profile/profile.d`, then launches the repository source profile with `-NoProfile`; it does not benchmark a possibly stale installed copy. Git updater smoke cases cover the normal files backend and, when `git init -h` advertises `--ref-format`, a real reftable repository; Git versions without that option print an explicit reftable `SKIP`, while an advertised but failed reftable initialization fails validation. Startup results report both `MedianMs` and `AverageMs`, with the median used for comparisons. The default `BatchSourceProfile` metric excludes interactive-only features. `-InteractiveRuns` adds `InteractiveSourceProfile` and requires an unredirected ConsoleHost so PSReadLine, completion, Carapace, and prompt watchers actually load. Each interactive child has a 30-second safety timeout, and profile errors exit nonzero instead of leaving a `-NoExit` shell open. Any unexpected batch child-process output or nonzero exit fails the run.
+To run only the Rust helper tests:
+
+```powershell
+Push-Location profile/profile.d/job-runner
+cargo test --locked
+Pop-Location
+```
+
+The test script checks parser errors, policy regressions, isolated runtime smoke cases, the Rust `jrun` unit and Windows process-tree integration tests, and a small startup benchmark. It recursively parses the entry profile and every `.ps1` file under `profile/profile.d`, then launches the repository source profile with `-NoProfile`; it does not benchmark a possibly stale installed copy. Git updater smoke cases cover the normal files backend and, when `git init -h` advertises `--ref-format`, a real reftable repository; Git versions without that option print an explicit reftable `SKIP`, while an advertised but failed reftable initialization fails validation. Startup results report both `MedianMs` and `AverageMs`, with the median used for comparisons. The default `BatchSourceProfile` metric excludes interactive-only features. `-InteractiveRuns` adds `InteractiveSourceProfile` and requires an unredirected ConsoleHost so PSReadLine, completion, Carapace, and prompt watchers actually load. Each interactive child has a 30-second safety timeout, and profile errors exit nonzero instead of leaving a `-NoExit` shell open. Any unexpected batch child-process output or nonzero exit fails the run.
 
 ## Runtime Cache
 
 The profile writes local runtime cache under `$env:LOCALAPPDATA\PowerShell\ProfileCache`. This cache is machine-local and should not be committed.
 
-Cached data includes async git status, async toolchain status, and generated Carapace completion script output. Git and toolchain cache files are published atomically from same-directory temporary files. Prompt updater scripts live in `profile/profile.d/prompt-updaters`; startup uses those source-controlled scripts directly instead of generating updater script files into the cache.
+Cached data includes async git status, async toolchain status, and generated Carapace completion script output. Git and toolchain cache files are published atomically from same-directory temporary files. Prompt updater scripts live in `profile/profile.d/prompt-updaters`; startup uses those source-controlled scripts directly instead of generating updater script files into the cache. Installation keeps Cargo's ignored `jrun` build output under `.cargo-target`; validation uses a temporary Cargo target under its test root and removes it afterward. Command execution never invokes Cargo.
 
 ## Maintenance Policy
 

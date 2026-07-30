@@ -80,6 +80,7 @@ if ($script:State.Session.IsInteractive) {
 }
 
 $profileParts = @(
+    '15-job-object.ps1',
     '20-node.ps1',
     '10-prompt.ps1',
     '25-icons.ps1'
@@ -109,6 +110,7 @@ foreach ($profilePart in $profileParts) {
 
 $publicFunctions = @(
     'prompt', 'TabExpansion2', 'Set-LeanPromptSymbolSet', 'Test-LeanPromptGlyphs'
+    'Invoke-JobProcess', 'jrun'
     'node', 'npm', 'npx', 'pnpm', 'yarn', 'corepack'
     'icons'
     'ls', 'l', 'll', 'la', 'lt'

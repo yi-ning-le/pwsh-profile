@@ -19,6 +19,7 @@ The `profile/` tree is the source of truth. The installed profile is a synchroni
 
 The following parts load in every supported session:
 
+- `15-job-object.ps1`: `jrun`, native command resolution, and discovery of the helper built by the installer.
 - `20-node.ps1`: fnm discovery, environment state, and Node command wrappers.
 - `10-prompt.ps1`: prompt rendering, project-path logic, async status caches, and background process helpers.
 - `25-icons.ps1`: the on-demand Terminal-Icons helper.
@@ -305,6 +306,16 @@ Non-interactive sessions do not prewarm fnm. They initialize only if a wrapped N
 
 If `fnm` is not installed, this profile part returns without installing the Node wrappers.
 
+### Native process-tree runner
+
+`jrun <command> [arguments]` starts a native command suspended, assigns it to a kill-on-close Windows Job Object, and then resumes it in the current console. Standard handles and the current filesystem working directory are inherited.
+
+The terminal's `CTRL_C_EVENT` is therefore delivered directly to the runner, root process, and descendants in the same console. After the first Ctrl+C, `jrun` prints a new-line, bright-yellow two-line status block on an interactive stderr, gives the Job Object up to three seconds to empty naturally, and returns exit code 130. A second Ctrl+C or the grace deadline prints a bright-red escalation block and terminates the entire Job Object with exit code 130. Redirected stderr uses the same two-line messages without ANSI escapes. If the root exits normally while descendants remain, closing the Job Object terminates those leftovers and `jrun` preserves the root exit code.
+
+`.cmd` and `.bat` targets run through `%ComSpec% /d /s /c`. PowerShell scripts run through `pwsh -NoLogo -NoProfile -File`.
+
+The Rust 2024 helper uses direct `windows-sys` bindings and a static MSVC CRT. `scripts/install.ps1` compiles it into the staged `profile.d/job-runner` tree before replacing the active profile, so profile startup and command execution never invoke Cargo. `npm run` and `npm run-script` route the active installation's `npm.cmd` through `jrun`; other Node commands keep their direct invocation path.
+
 ## Commands, Aliases, and Helpers
 
 ### Directory Listing
@@ -391,12 +402,13 @@ Required commands:
 - ripgrep (`rg`)
 - `fnm`
 - Carapace
+- Rust MSVC toolchain (`cargo`), required while installing the profile and running the standard validation suite
 
 Terminal-Icons is optional and loads only when `icons` is called.
 
 The repository intentionally does not require or initialize `zoxide`, `fzf`, or PSFzf.
 
-`packages/winget.ps1` installs the required external tools with exact winget package IDs and stops at the first failed package.
+`packages/winget.ps1` installs the required external tools, including Rustup, with exact winget package IDs and stops at the first failed package.
 
 ## Installation
 
@@ -409,11 +421,14 @@ Run:
 The installer:
 
 1. Parses the entrypoint and every profile part before touching the destination.
-2. Copies the entrypoint and every recursive `*.ps1` file under `profile/profile.d` into a staging directory next to the destination.
-3. Parses the staged files again.
-4. Moves the current entrypoint and `profile.d` to timestamped backups.
-5. Moves the staged `profile.d` and entrypoint into place as a mirrored unit.
-6. Rolls back the previous installation if replacement fails.
+2. Copies the entrypoint and every recursive file under `profile/profile.d` into a staging directory next to the destination.
+3. Builds the static `jrun.exe` into the staged `profile.d/job-runner` directory.
+4. Parses the staged PowerShell files again.
+5. Moves the current entrypoint and `profile.d` to timestamped backups.
+6. Moves the staged `profile.d` and entrypoint into place as a mirrored unit.
+7. Rolls back the previous installation if replacement fails.
+
+Installation keeps Cargo output under the repository's ignored `.cargo-target/jrun` directory. The validation script uses an isolated Cargo target under its temporary test root and removes it afterward, so neither workflow creates `target/` inside the installable `profile/` tree.
 
 The active destination is `$PROFILE.CurrentUserCurrentHost` plus a sibling `profile.d` directory. Stale scripts from an older installation do not survive in the active tree.
 
@@ -450,6 +465,14 @@ Run the standard validation suite:
 .\scripts\test-profile.ps1
 ```
 
+Run only the Rust helper tests from the directory containing its Cargo configuration:
+
+```powershell
+Push-Location profile/profile.d/job-runner
+cargo test --locked
+Pop-Location
+```
+
 Use more startup samples when comparing performance-sensitive changes:
 
 ```powershell
@@ -465,6 +488,7 @@ Measure the complete interactive profile from a real, unredirected Windows Termi
 Validation covers:
 
 - parser cleanliness for the entrypoint and every recursive profile part
+- Rust unit tests plus real `CTRL_C_EVENT` and Job Object process-tree integration tests for `jrun`
 - dependency and maintenance policies
 - interactive gating for command, file, redirected, and `-NoExit` sessions
 - prompt layout, color, exit status, cache, and async redraw behavior

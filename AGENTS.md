@@ -11,6 +11,8 @@ This repo contains a personal PowerShell profile. Treat the `profile/` tree as t
 - Keep async prompt updater scripts in `profile/profile.d/prompt-updaters` readable and source-controlled; do not move them back into generated cache scripts or large here-strings in `10-prompt.ps1`.
 - Preserve reftable compatibility by using Git plumbing for branch/ref identity instead of parsing `.git/HEAD` or files under `.git/refs`.
 - When adding profile part scripts, keep them under `profile/profile.d` so `scripts/install.ps1` syncs them recursively.
+- Preserve `jrun` interrupt semantics: the first Ctrl+C remains cooperative, a second Ctrl+C or the three-second deadline terminates the Job Object, and interrupted runs return 130. Keep `npm run` and `npm run-script` routed through the resolved `npm.cmd`; do not substitute `npm-cli.js` or `node --run`.
+- Run Cargo for `jrun` from `profile/profile.d/job-runner` or set `CARGO_TARGET_DIR` outside `profile/`. Never leave `target/` inside the installable profile tree because the installer mirrors it recursively.
 - Measure startup impact before and after performance-related changes.
 
 ## Validation
@@ -33,4 +35,4 @@ From a real, unredirected Windows Terminal, measure interactive startup with:
 .\scripts\test-profile.ps1 -InteractiveRuns 20
 ```
 
-The test script recursively parses the entry profile and every `.ps1` file under `profile/profile.d`, then runs policy checks, isolated smoke tests, and a batch startup benchmark. The optional interactive benchmark is intentionally unavailable in redirected automation.
+The test script recursively parses the entry profile and every `.ps1` file under `profile/profile.d`, runs the Rust `jrun` unit and real Windows process-tree integration tests, then runs policy checks, isolated smoke tests, and a batch startup benchmark. The optional interactive benchmark is intentionally unavailable in redirected automation.

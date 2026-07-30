@@ -192,13 +192,12 @@ function Update-FnmEnvironmentForPrompt {
 
 foreach ($__fnmWrapperName in 'node', 'npm', 'npx', 'pnpm', 'yarn', 'corepack') {
     Set-Item -Path "function:\$__fnmWrapperName" -Value {
-        $null = Initialize-FnmForUse
-        Update-FnmVersionForCurrentDirectory -Wait
         $__commandName = $MyInvocation.MyCommand.Name
-        $__target = Get-Command "$__commandName.exe", "$__commandName.cmd", "$__commandName.ps1" -CommandType Application -ErrorAction SilentlyContinue |
-            Select-Object -First 1
-        if (-not $__target) { $__target = Get-Command $__commandName -CommandType Application -ErrorAction Stop | Select-Object -First 1 }
-        & $__target.Source @args
+        $__target = Resolve-PwshNativeCommand -Name $__commandName
+        if ($__commandName -eq 'npm' -and $args.Count -gt 0 -and $args[0] -in 'run', 'run-script') {
+            Invoke-JobProcess -FilePath $__target.Source -ArgumentList ([string[]]$args)
+        }
+        else { & $__target.Source @args }
     }
 }
 Remove-Variable __fnmWrapperName -ErrorAction SilentlyContinue

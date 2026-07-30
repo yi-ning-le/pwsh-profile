@@ -111,7 +111,6 @@ function Get-RelativeProfilePaths {
     param([Parameter(Mandatory)][string]$Root)
 
     @(Get-ChildItem -LiteralPath $Root -Recurse -File |
-        Where-Object Extension -in '.ps1', '.psm1' |
         ForEach-Object {
         [System.IO.Path]::GetRelativePath($Root, $_.FullName) -replace '\\', '/'
     } | Sort-Object)
@@ -123,8 +122,15 @@ function Assert-ProfileMirror {
         [Parameter(Mandatory)][string]$TargetRoot
     )
 
-    $difference = @(Compare-Object (Get-RelativeProfilePaths $SourceRoot) (Get-RelativeProfilePaths $TargetRoot))
+    $generatedJrun = 'job-runner/jrun.exe'
+    $sourcePaths = @(Get-RelativeProfilePaths $SourceRoot | Where-Object { $_ -cne $generatedJrun })
+    $targetPaths = @(Get-RelativeProfilePaths $TargetRoot | Where-Object { $_ -cne $generatedJrun })
+    $difference = @(Compare-Object $sourcePaths $targetPaths)
     if ($difference.Count -gt 0) { throw "Installed profile.d does not mirror source: $($difference | Out-String)" }
+    $installedJrun = Join-Path $TargetRoot 'job-runner\jrun.exe'
+    if (-not [System.IO.File]::Exists($installedJrun) -or (Get-Item -LiteralPath $installedJrun).Length -eq 0) {
+        throw 'Installed profile.d does not contain the generated jrun executable'
+    }
 }
 
 function Assert-NoInstallTransients {
@@ -203,12 +209,44 @@ function Measure-PwshStartup {
 
 $oldLocalAppData = $env:LOCALAPPDATA
 $oldPath = $env:PATH
+$oldJrunPath = $env:PWSH_JRUN_PATH
 $testRoot = Join-Path ([System.IO.Path]::GetTempPath()) "pwsh-profile-test-$PID"
 $env:PWSH_PROFILE_SOURCE = $profileSource
 
 try {
     $env:LOCALAPPDATA = Join-Path $testRoot 'LocalAppData'
     New-Item -ItemType Directory -Force -Path $env:LOCALAPPDATA | Out-Null
+    $jrunSource = Join-Path $profilePartsDir 'job-runner'
+    $jrunTarget = Join-Path $testRoot 'jrun-target'
+    $cargo = Get-Command cargo.exe -CommandType Application -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if (-not $cargo) { throw 'Cargo was not found; cannot run jrun tests.' }
+    $oldCargoTargetDirectory = $env:CARGO_TARGET_DIR
+    try {
+        $env:CARGO_TARGET_DIR = $jrunTarget
+        Push-Location $jrunSource
+        try {
+            $jrunTestOutput = @(& $cargo.Source test --locked --quiet -- --test-threads=1 2>&1)
+            $jrunTestExitCode = $global:LASTEXITCODE
+        }
+        finally { Pop-Location }
+    }
+    finally {
+        if ($null -eq $oldCargoTargetDirectory) {
+            Remove-Item Env:CARGO_TARGET_DIR -ErrorAction SilentlyContinue
+        }
+        else { $env:CARGO_TARGET_DIR = $oldCargoTargetDirectory }
+    }
+    if ($jrunTestExitCode -ne 0) {
+        throw "jrun Rust tests failed (exit $jrunTestExitCode): $($jrunTestOutput -join ' ')"
+    }
+    Write-Host '[PASS] JrunRustTests'
+
+    $env:PWSH_JRUN_PATH = Join-Path $testRoot 'jrun.exe'
+    & (Join-Path $PSScriptRoot 'build-jrun.ps1') `
+        -SourceDirectory $jrunSource `
+        -OutputPath $env:PWSH_JRUN_PATH `
+        -TargetDirectory $jrunTarget
 
     $failingInteractiveProfile = Join-Path $testRoot 'failing-interactive-profile.ps1'
     Set-Content -LiteralPath $failingInteractiveProfile -Value "throw 'interactive profile smoke failure'"
@@ -251,6 +289,7 @@ $module = Get-Module PwshProfile -ErrorAction Stop
 
 $expectedFunctions = @(
     'prompt', 'Set-LeanPromptSymbolSet', 'Test-LeanPromptGlyphs'
+    'Invoke-JobProcess', 'jrun'
     'icons'
     'ls', 'l', 'll', 'la', 'lt'
     'pwd', 'mkdir', '..', '...', '....'
@@ -291,6 +330,44 @@ if (Get-EventSubscriber -SourceIdentifier 'PowerShell.OnIdle' -ErrorAction Silen
 }
 if (-not (Test-Path function:\prompt) -or -not (Test-Path function:\icons) -or -not (Test-Path function:\grep)) {
     throw 'non-interactive profile parts did not finish loading'
+}
+
+$jobOutput = @(jrun pwsh -NoLogo -NoProfile -Command 'Write-Output job-output; exit 23')
+if (($jobOutput -join ',') -cne 'job-output' -or $global:LASTEXITCODE -ne 23) {
+    throw "Job runner did not preserve native output/exit code: output=[$($jobOutput -join ',')] exit=$global:LASTEXITCODE"
+}
+$jobArguments = @('', 'plain', 'two words', 'quote"inside', 'trailing\')
+$expectedJobArguments = ConvertTo-Json -Compress -InputObject $jobArguments
+$actualJobArguments = @(
+    jrun pwsh -NoLogo -NoProfile -CommandWithArgs '$args | ConvertTo-Json -Compress' @jobArguments
+) -join "`n"
+if ($actualJobArguments -cne $expectedJobArguments -or $global:LASTEXITCODE -ne 0) {
+    throw "Job runner changed native arguments: expected=[$expectedJobArguments] actual=[$actualJobArguments] exit=$global:LASTEXITCODE"
+}
+$jobSmokeRoot = Join-Path $env:LOCALAPPDATA 'job-runner-smoke'
+$env:PWSH_JOB_SMOKE_ROOT = $jobSmokeRoot
+New-Item -ItemType Directory -Force -Path $jobSmokeRoot | Out-Null
+Set-Content -LiteralPath (Join-Path $jobSmokeRoot 'child.ps1') -Value @(
+    '[System.IO.File]::WriteAllText((Join-Path $env:PWSH_JOB_SMOKE_ROOT ''child.pid''), [string]$PID)'
+    'Start-Sleep -Seconds 30'
+)
+Set-Content -LiteralPath (Join-Path $jobSmokeRoot 'parent.ps1') -Value @(
+    '$child = Start-Process -FilePath (Join-Path $PSHOME ''pwsh.exe'') -ArgumentList @('
+    '    ''-NoLogo'', ''-NoProfile'', ''-File'', (Join-Path $env:PWSH_JOB_SMOKE_ROOT ''child.ps1'')'
+    ') -PassThru'
+    '$deadline = [datetime]::UtcNow.AddSeconds(5)'
+    'while (-not (Test-Path -LiteralPath (Join-Path $env:PWSH_JOB_SMOKE_ROOT ''child.pid'')) -and'
+    '    [datetime]::UtcNow -lt $deadline) {'
+    '    Start-Sleep -Milliseconds 20'
+    '}'
+    'exit 0'
+)
+jrun pwsh -NoLogo -NoProfile -File (Join-Path $jobSmokeRoot 'parent.ps1')
+if ($global:LASTEXITCODE -ne 0) { throw "Job runner containment parent failed: $global:LASTEXITCODE" }
+$jobChildPid = [int](Get-Content -LiteralPath (Join-Path $jobSmokeRoot 'child.pid') -Raw)
+Start-Sleep -Milliseconds 100
+if (Get-Process -Id $jobChildPid -ErrorAction SilentlyContinue) {
+    throw "Job runner left detached child $jobChildPid alive after its root exited"
 }
 
 & $module {
@@ -1388,6 +1465,12 @@ exit 0
         'echo v99.0.0'
         'exit /b 0'
     )
+    Set-Content -LiteralPath (Join-Path $fakeFnmDir 'npm.cmd') -Encoding ASCII -Value @(
+        '@echo off'
+        'echo npm "%~1" "%~2">>"%PWSH_FNM_LOG%"'
+        'echo npm-job-ok'
+        'exit /b 0'
+    )
     $env:PATH = "$fakeFnmDir;$oldPath"
     $fnmSuccessScript = @'
 $ErrorActionPreference = 'Stop'
@@ -1400,7 +1483,9 @@ $fnmState = & $module { $script:State.Fnm }
 if ($fnmState.Status -cne 'NotStarted') { throw 'batch session prewarmed fnm' }
 if (-not (Test-Path function:\node)) { throw 'node wrapper was not installed before fnm initialization' }
 $version = node --version
-if ($version -cne 'v99.0.0' -or $env:PWSH_FNM_APPLIED -cne 'true' -or $fnmState.Status -cne 'Ready') {
+$npmOutput = npm run build
+if ($version -cne 'v99.0.0' -or $npmOutput -cne 'npm-job-ok' -or
+    $env:PWSH_FNM_APPLIED -cne 'true' -or $fnmState.Status -cne 'Ready') {
     throw 'node wrapper did not wait for and apply fnm JSON'
 }
 if ($env:LOCALAPPDATA -cne $parentLocalAppData) { throw 'fnm initialization changed parent LOCALAPPDATA' }
@@ -1418,6 +1503,7 @@ exit 0
     $fnmCalls = @(Get-Content -LiteralPath $env:PWSH_FNM_LOG)
     if (@($fnmCalls | Where-Object { $_ -ceq 'env --json --resolve-engines=false' }).Count -ne 1 -or
         @($fnmCalls | Where-Object { $_ -ceq 'node --version' }).Count -ne 1 -or
+        @($fnmCalls | Where-Object { $_ -ceq 'npm "run" "build"' }).Count -ne 1 -or
         @($fnmCalls | Where-Object { $_ -ceq "LOCALAPPDATA=$env:TEMP" }).Count -ne 1) {
         throw "fnm initialization calls were invalid: [$($fnmCalls -join '; ')]"
     }
@@ -1674,6 +1760,7 @@ exit 0
     $installSmokeProfile = Join-Path $installSmokeRoot 'profile'
     New-Item -ItemType Directory -Force -Path $installSmokeScripts, $installSmokeProfile | Out-Null
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'install.ps1') -Destination (Join-Path $installSmokeScripts 'install.ps1')
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'build-jrun.ps1') -Destination (Join-Path $installSmokeScripts 'build-jrun.ps1')
     Copy-Item -Path (Join-Path $repoRoot 'profile\*') -Destination $installSmokeProfile -Recurse
     Set-Content -LiteralPath (Join-Path $installSmokeProfile 'profile.d\98-test-module.psm1') -Value '# installer module fixture'
     Set-Content -LiteralPath (Join-Path $installSmokeProfile 'profile.d\99-invalid.psm1') -Value 'function Invalid-ProfilePart {'
@@ -2505,11 +2592,13 @@ exit 0
 finally {
     $env:LOCALAPPDATA = $oldLocalAppData
     $env:PATH = $oldPath
+    if ($null -eq $oldJrunPath) { Remove-Item Env:PWSH_JRUN_PATH -ErrorAction SilentlyContinue }
+    else { $env:PWSH_JRUN_PATH = $oldJrunPath }
     Remove-Item Env:PWSH_PROFILE_SOURCE, Env:PWSH_COMPLETION_TEST_ROOT, Env:PWSH_ZSH_COMPLETION_ROOT, `
         Env:PWSH_GIT_PROMPT_ROOT, Env:PWSH_GIT_PROMPT_SEED, `
         Env:PWSH_INSTALL_SCRIPT, Env:PWSH_INSTALL_TARGET, Env:PWSH_WINGET_SCRIPT, `
         Env:PWSH_WINGET_LOG, Env:PWSH_WINGET_PATH, Env:PWSH_FNM_LOG, `
         Env:PWSH_CARAPACE_LOG, Env:PWSH_CARAPACE_TEST_LOCALAPPDATA, Env:PWSH_CARAPACE_EMPTY_PATH, `
-        Env:PWSH_CARAPACE_PWSH, Env:PWSH_CARAPACE_MODE -ErrorAction SilentlyContinue
+        Env:PWSH_CARAPACE_PWSH, Env:PWSH_CARAPACE_MODE, Env:PWSH_JOB_SMOKE_ROOT -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue
 }

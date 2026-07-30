@@ -11,7 +11,8 @@ $packages = @(
     @{ Id = 'sharkdp.bat'; Name = 'bat' },
     @{ Id = 'BurntSushi.ripgrep.MSVC'; Name = 'ripgrep' },
     @{ Id = 'Schniz.fnm'; Name = 'fnm' },
-    @{ Id = 'rsteube.Carapace'; Name = 'Carapace' }
+    @{ Id = 'rsteube.Carapace'; Name = 'Carapace' },
+    @{ Id = 'Rustlang.Rustup'; Name = 'Rustup' }
 )
 
 try {

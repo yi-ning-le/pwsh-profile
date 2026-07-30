@@ -8,6 +8,7 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $source = Join-Path $repoRoot 'profile\Microsoft.PowerShell_profile.ps1'
 $sourceParts = Join-Path $repoRoot 'profile\profile.d'
+$jrunBuilder = Join-Path $PSScriptRoot 'build-jrun.ps1'
 $target = $PROFILE.CurrentUserCurrentHost
 
 if (-not (Test-Path -LiteralPath $source)) {
@@ -15,6 +16,9 @@ if (-not (Test-Path -LiteralPath $source)) {
 }
 if (-not (Test-Path -LiteralPath $sourceParts)) {
     throw "Profile parts not found: $sourceParts"
+}
+if (-not (Test-Path -LiteralPath $jrunBuilder)) {
+    throw "jrun build script not found: $jrunBuilder"
 }
 
 function Assert-PowerShellSyntax {
@@ -73,13 +77,15 @@ try {
     New-Item -ItemType Directory -Force -Path $stageParts | Out-Null
     Copy-Item -LiteralPath $source -Destination $stageTarget
     Get-ChildItem -LiteralPath $sourceParts -Recurse -File |
-        Where-Object Extension -in '.ps1', '.psm1' |
         ForEach-Object {
         $relative = [System.IO.Path]::GetRelativePath($sourceParts, $_.FullName)
         $destination = Join-Path $stageParts $relative
         New-Item -ItemType Directory -Force -Path (Split-Path -Parent $destination) | Out-Null
         Copy-Item -LiteralPath $_.FullName -Destination $destination
     }
+    & $jrunBuilder `
+        -SourceDirectory (Join-Path $sourceParts 'job-runner') `
+        -OutputPath (Join-Path $stageParts 'job-runner\jrun.exe')
 
     $stageFiles = @($stageTarget) + @(
         Get-ChildItem -LiteralPath $stageParts -Recurse -File |
