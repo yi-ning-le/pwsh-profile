@@ -312,7 +312,7 @@ If `fnm` is not installed, this profile part returns without installing the Node
 
 The terminal's `CTRL_C_EVENT` is therefore delivered directly to the runner, root process, and descendants in the same console. After the first Ctrl+C, `jrun` prints a new-line, bright-yellow two-line status block on an interactive stderr, gives the Job Object up to three seconds to empty naturally, and returns exit code 130. A second Ctrl+C or the grace deadline prints a bright-red escalation block and terminates the entire Job Object with exit code 130. Redirected stderr uses the same two-line messages without ANSI escapes. If the root exits normally while descendants remain, closing the Job Object terminates those leftovers and `jrun` preserves the root exit code.
 
-`.cmd` and `.bat` targets run through `%ComSpec% /d /s /c`. PowerShell scripts run through `pwsh -NoLogo -NoProfile -File`.
+`.cmd` and `.bat` targets run through `%ComSpec% /d /s /v:off /c`, so delayed expansion cannot rewrite literal `!NAME!` arguments. PowerShell scripts run through `pwsh -NoLogo -NoProfile -File`.
 
 The Rust 2024 helper uses direct `windows-sys` bindings and a static MSVC CRT. `scripts/install.ps1` compiles it into the staged `profile.d/job-runner` tree before replacing the active profile, so profile startup and command execution never invoke Cargo. `npm run` and `npm run-script` route the active installation's `npm.cmd` through `jrun`; other Node commands keep their direct invocation path.
 

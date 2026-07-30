@@ -1,5 +1,6 @@
 #![cfg(windows)]
 
+use std::fmt::Write as _;
 use std::fs;
 use std::io::Read;
 use std::os::windows::process::CommandExt;
@@ -23,6 +24,7 @@ const ROOT_DELAY_MS: &str = "JRUN_TEST_ROOT_DELAY_MS";
 const CHILD_DELAY_MS: &str = "JRUN_TEST_CHILD_DELAY_MS";
 const SIGNAL_PID: &str = "JRUN_TEST_SIGNAL_PID";
 const SECOND_SIGNAL_MS: &str = "JRUN_TEST_SECOND_SIGNAL_MS";
+const ROOT_WAITS_FOR_CHILD: &str = "JRUN_TEST_ROOT_WAITS_FOR_CHILD";
 const NOTICE: &str = concat!(
     "jrun: Ctrl+C received\n",
     "jrun: Waiting up to 3 seconds for graceful shutdown. Press Ctrl+C again to force.\n"
@@ -176,6 +178,7 @@ fn run_ctrl_scenario(
     root_delay: Duration,
     child_delay: Duration,
     second_after: Option<Duration>,
+    root_waits_for_child: bool,
 ) -> (Duration, String, TestDir) {
     let directory = TestDir::new(name);
     let root_ready = directory.0.join("root.ready");
@@ -191,6 +194,7 @@ fn run_ctrl_scenario(
         .env(TEST_FIXTURE, "ctrl")
         .env(ROOT_DELAY_MS, root_delay_ms)
         .env(CHILD_DELAY_MS, child_delay_ms)
+        .env(ROOT_WAITS_FOR_CHILD, root_waits_for_child.to_string())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -233,6 +237,7 @@ fn orphan_fixture() {
     wait_for_file(&directory.join("child.pid"), Duration::from_secs(5));
 }
 
+#[allow(clippy::zombie_processes)] // One test requires the child to outlive its root.
 fn ctrl_fixture() {
     CTRL_RECEIVED.store(false, Ordering::SeqCst);
     assert_ne!(
@@ -273,7 +278,9 @@ fn ctrl_fixture() {
     let delay = std::env::var(delay_name).unwrap().parse::<u64>().unwrap();
     std::thread::sleep(Duration::from_millis(delay));
     fs::write(directory.join(format!("{role}.graceful")), "graceful\n").unwrap();
-    if let Some(child) = child.as_mut() {
+    if std::env::var(ROOT_WAITS_FOR_CHILD).as_deref() != Ok("false")
+        && let Some(child) = child.as_mut()
+    {
         child.wait().unwrap();
     }
 }
@@ -324,6 +331,83 @@ fn preserves_root_exit_code() {
 }
 
 #[test]
+fn preserves_batch_metacharacters() {
+    let directory = TestDir::new("batch-arguments");
+    let script = directory.0.join("capture.cmd");
+    let output = directory.0.join("batch.args");
+    let expected = [
+        "",
+        "plain",
+        "two words",
+        "trailing\\",
+        "!PATH!",
+        "a&b",
+        "a|b",
+        "a<b",
+        "a>b",
+        "^caret",
+        "(paren)",
+    ];
+    let mut contents = String::from("@echo off\r\nsetlocal DisableDelayedExpansion\r\n");
+    for index in 0..expected.len() {
+        write!(
+            &mut contents,
+            "set \"JRUN_CAPTURE_{index:02}=[%~1]\"\r\nshift\r\n"
+        )
+        .unwrap();
+    }
+    contents.push_str("> \"%JRUN_TEST_DIR%\\batch.args\" set JRUN_CAPTURE_\r\n");
+    fs::write(&script, contents).unwrap();
+
+    let mut command = Command::new(env!("CARGO_BIN_EXE_jrun"));
+    command
+        .arg(&script)
+        .args(expected)
+        .env(TEST_DIR, &directory.0)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    let child = command.spawn().unwrap();
+    let (status, stderr) = finish_child(child, Duration::from_secs(5));
+    assert_eq!(status.code(), Some(0), "{stderr}");
+    assert!(stderr.is_empty());
+
+    let actual: Vec<_> = fs::read_to_string(output)
+        .unwrap()
+        .lines()
+        .map(|line| {
+            line.split_once('=')
+                .unwrap()
+                .1
+                .strip_prefix('[')
+                .unwrap()
+                .strip_suffix(']')
+                .unwrap()
+                .to_owned()
+        })
+        .collect();
+
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn reports_descriptive_create_process_errors() {
+    let directory = TestDir::new("missing-command");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_jrun"));
+    command
+        .arg(directory.0.join("missing.exe"))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    let child = command.spawn().unwrap();
+    let (status, stderr) = finish_child(child, Duration::from_secs(5));
+
+    assert_eq!(status.code(), Some(125));
+    assert!(stderr.starts_with("jrun: CreateProcessW failed: "));
+    assert!(stderr.contains("(os error 2)"));
+}
+
+#[test]
 fn kills_leftover_descendants_after_normal_root_exit() {
     let directory = TestDir::new("orphan");
     let child_pid_path = directory.0.join("child.pid");
@@ -343,6 +427,33 @@ fn ctrl_c_allows_graceful_tree_shutdown() {
         Duration::from_secs(1),
         Duration::from_millis(500),
         None,
+        true,
+    );
+
+    assert_elapsed(
+        elapsed,
+        Duration::from_millis(800),
+        Duration::from_millis(2500),
+    );
+    assert_eq!(stderr, NOTICE);
+    assert_eq!(
+        fs::read_to_string(directory.0.join("root.graceful")).unwrap(),
+        "graceful\n"
+    );
+    assert_eq!(
+        fs::read_to_string(directory.0.join("child.graceful")).unwrap(),
+        "graceful\n"
+    );
+}
+
+#[test]
+fn ctrl_c_waits_for_descendants_after_root_exits() {
+    let (elapsed, stderr, directory) = run_ctrl_scenario(
+        "root-exits-first",
+        Duration::from_millis(100),
+        Duration::from_secs(1),
+        None,
+        false,
     );
 
     assert_elapsed(
@@ -368,6 +479,7 @@ fn ctrl_c_force_kills_tree_after_three_seconds() {
         Duration::from_secs(10),
         Duration::from_secs(10),
         None,
+        true,
     );
 
     assert_elapsed(
@@ -387,6 +499,7 @@ fn second_ctrl_c_force_kills_tree_immediately() {
         Duration::from_secs(10),
         Duration::from_secs(10),
         Some(Duration::from_millis(500)),
+        true,
     );
 
     assert_elapsed(

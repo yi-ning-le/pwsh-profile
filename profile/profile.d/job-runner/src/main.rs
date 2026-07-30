@@ -102,7 +102,7 @@ fn append_cmd_quoted(out: &mut Vec<u16>, arg: &OsStr) {
 fn batch_command_line(shell: &OsStr, args: &[OsString]) -> Vec<u16> {
     let mut result = Vec::new();
     append_windows_quoted(&mut result, shell);
-    result.extend(" /d /s /c \"".encode_utf16());
+    result.extend(" /d /s /v:off /c \"".encode_utf16());
     for (index, arg) in args.iter().enumerate() {
         if index != 0 {
             result.push(b' ' as u16);
@@ -132,7 +132,10 @@ fn fail(operation: &str) -> i32 {
 }
 
 fn fail_with_code(operation: &str, code: u32) -> i32 {
-    eprintln!("jrun: {operation} failed: {code}");
+    eprintln!(
+        "jrun: {operation} failed: {}",
+        std::io::Error::from_raw_os_error(code as i32)
+    );
     125
 }
 
@@ -228,6 +231,9 @@ fn run() -> i32 {
         return 125;
     }
 
+    let shell = is_batch_file(&args[0])
+        .then(|| std::env::var_os("ComSpec").unwrap_or_else(|| OsString::from("cmd.exe")));
+
     if unsafe { SetConsoleCtrlHandler(Some(ctrl_handler), 1) } == 0 {
         return fail("SetConsoleCtrlHandler");
     }
@@ -251,8 +257,6 @@ fn run() -> i32 {
         return fail("SetInformationJobObject");
     }
 
-    let shell = is_batch_file(&args[0])
-        .then(|| std::env::var_os("ComSpec").unwrap_or_else(|| OsString::from("cmd.exe")));
     let application = shell.as_ref().map(|value| wide_null(value));
     let mut line = match shell.as_ref() {
         Some(value) => batch_command_line(value, &args),
@@ -395,11 +399,11 @@ mod tests {
 
     #[test]
     fn quotes_batch_arguments() {
-        let args = ["script.cmd", "two words", "quote\"inside"].map(OsString::from);
+        let args = ["script.cmd", "two words", "quote\"inside", "!PATH!"].map(OsString::from);
 
         assert_eq!(
             display_command_line(batch_command_line(OsStr::new("cmd.exe"), &args)),
-            r#"cmd.exe /d /s /c ""script.cmd" "two words" "quote""inside"""#
+            r#"cmd.exe /d /s /v:off /c ""script.cmd" "two words" "quote""inside" "!PATH!"""#
         );
     }
 
