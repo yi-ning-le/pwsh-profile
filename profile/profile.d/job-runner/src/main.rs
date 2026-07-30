@@ -14,14 +14,16 @@ use windows_sys::Win32::System::Console::{
     STD_OUTPUT_HANDLE, SetConsoleCtrlHandler,
 };
 use windows_sys::Win32::System::JobObjects::{
-    AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-    JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-    JobObjectBasicAccountingInformation, JobObjectExtendedLimitInformation,
-    QueryInformationJobObject, SetInformationJobObject, TerminateJobObject,
+    CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectBasicAccountingInformation,
+    JobObjectExtendedLimitInformation, QueryInformationJobObject, SetInformationJobObject,
+    TerminateJobObject,
 };
 use windows_sys::Win32::System::Threading::{
-    CREATE_SUSPENDED, CreateProcessW, GetExitCodeProcess, PROCESS_INFORMATION, ResumeThread,
-    STARTF_USESTDHANDLES, STARTUPINFOW, TerminateProcess, WaitForSingleObject,
+    CREATE_SUSPENDED, CreateProcessW, DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT,
+    GetExitCodeProcess, InitializeProcThreadAttributeList, PROC_THREAD_ATTRIBUTE_JOB_LIST,
+    PROCESS_INFORMATION, ResumeThread, STARTF_USESTDHANDLES, STARTUPINFOEXW,
+    UpdateProcThreadAttribute, WaitForSingleObject,
 };
 
 const INTERRUPT_GRACE: Duration = Duration::from_secs(3);
@@ -45,6 +47,65 @@ impl Drop for Handle {
             unsafe {
                 CloseHandle(self.0);
             }
+        }
+    }
+}
+
+struct ProcThreadAttributeList(Vec<usize>);
+
+impl ProcThreadAttributeList {
+    fn new(attribute_count: u32) -> Result<Self, i32> {
+        let mut bytes = 0;
+        unsafe {
+            InitializeProcThreadAttributeList(null_mut(), attribute_count, 0, &raw mut bytes);
+        }
+        if bytes == 0 {
+            return Err(fail("InitializeProcThreadAttributeList"));
+        }
+
+        let words = bytes.div_ceil(size_of::<usize>());
+        let mut storage = vec![0; words];
+        if unsafe {
+            InitializeProcThreadAttributeList(
+                storage.as_mut_ptr().cast(),
+                attribute_count,
+                0,
+                &raw mut bytes,
+            )
+        } == 0
+        {
+            return Err(fail("InitializeProcThreadAttributeList"));
+        }
+        Ok(Self(storage))
+    }
+
+    fn as_mut_ptr(&mut self) -> *mut std::ffi::c_void {
+        self.0.as_mut_ptr().cast()
+    }
+
+    fn set_job_list(&mut self, jobs: &[HANDLE]) -> Result<(), i32> {
+        if unsafe {
+            UpdateProcThreadAttribute(
+                self.as_mut_ptr(),
+                0,
+                PROC_THREAD_ATTRIBUTE_JOB_LIST as usize,
+                jobs.as_ptr().cast(),
+                size_of_val(jobs),
+                null_mut(),
+                null(),
+            )
+        } == 0
+        {
+            return Err(fail("UpdateProcThreadAttribute"));
+        }
+        Ok(())
+    }
+}
+
+impl Drop for ProcThreadAttributeList {
+    fn drop(&mut self) {
+        unsafe {
+            DeleteProcThreadAttributeList(self.as_mut_ptr());
         }
     }
 }
@@ -264,14 +325,22 @@ fn run() -> i32 {
     };
     let application_name = application.as_ref().map_or(null(), |value| value.as_ptr());
 
-    let mut startup = STARTUPINFOW {
-        cb: size_of::<STARTUPINFOW>() as u32,
-        dwFlags: STARTF_USESTDHANDLES,
-        hStdInput: unsafe { GetStdHandle(STD_INPUT_HANDLE) },
-        hStdOutput: unsafe { GetStdHandle(STD_OUTPUT_HANDLE) },
-        hStdError: unsafe { GetStdHandle(STD_ERROR_HANDLE) },
-        ..Default::default()
+    let job_list = [job.0];
+    let mut attributes = match ProcThreadAttributeList::new(1) {
+        Ok(attributes) => attributes,
+        Err(code) => return code,
     };
+    if let Err(code) = attributes.set_job_list(&job_list) {
+        return code;
+    }
+
+    let mut startup = STARTUPINFOEXW::default();
+    startup.StartupInfo.cb = size_of::<STARTUPINFOEXW>() as u32;
+    startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+    startup.StartupInfo.hStdInput = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
+    startup.StartupInfo.hStdOutput = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) };
+    startup.StartupInfo.hStdError = unsafe { GetStdHandle(STD_ERROR_HANDLE) };
+    startup.lpAttributeList = attributes.as_mut_ptr();
     let mut process = PROCESS_INFORMATION::default();
     if unsafe {
         CreateProcessW(
@@ -280,26 +349,21 @@ fn run() -> i32 {
             null(),
             null(),
             1,
-            CREATE_SUSPENDED,
+            CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT,
             null(),
             null(),
-            &raw mut startup,
+            &raw mut startup.StartupInfo,
             &raw mut process,
         )
     } == 0
     {
-        return fail("CreateProcessW");
+        let error = unsafe { GetLastError() };
+        drop(attributes);
+        return fail_with_code("CreateProcessW", error);
     }
+    drop(attributes);
     let process_handle = Handle(process.hProcess);
     let _thread_handle = Handle(process.hThread);
-
-    if unsafe { AssignProcessToJobObject(job.0, process_handle.0) } == 0 {
-        let error = unsafe { GetLastError() };
-        unsafe {
-            TerminateProcess(process_handle.0, 125);
-        }
-        return fail_with_code("AssignProcessToJobObject", error);
-    }
 
     if INTERRUPT_COUNT.load(Ordering::SeqCst) != 0 {
         report_status(
@@ -311,9 +375,6 @@ fn run() -> i32 {
     }
     if unsafe { ResumeThread(process.hThread) } == u32::MAX {
         let error = unsafe { GetLastError() };
-        unsafe {
-            TerminateProcess(process_handle.0, 125);
-        }
         return fail_with_code("ResumeThread", error);
     }
     if INTERRUPT_COUNT.load(Ordering::SeqCst) != 0 {

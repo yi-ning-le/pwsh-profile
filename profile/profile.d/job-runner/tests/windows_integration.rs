@@ -9,12 +9,18 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
-use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, WAIT_TIMEOUT};
+use windows_sys::Win32::Foundation::{
+    CloseHandle, GetLastError, INVALID_HANDLE_VALUE, WAIT_TIMEOUT,
+};
 use windows_sys::Win32::System::Console::{
     AttachConsole, CTRL_C_EVENT, FreeConsole, GenerateConsoleCtrlEvent, SetConsoleCtrlHandler,
 };
+use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+    CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
+};
 use windows_sys::Win32::System::Threading::{
-    CREATE_NEW_CONSOLE, OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
+    CREATE_NEW_CONSOLE, OpenProcess, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, TerminateProcess,
+    WaitForSingleObject,
 };
 
 const TEST_DIR: &str = "JRUN_TEST_DIR";
@@ -127,6 +133,72 @@ fn wait_until_dead(pid: u32) {
     }
 }
 
+fn child_processes(parent_pid: u32) -> Vec<(u32, String)> {
+    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+    assert_ne!(
+        snapshot,
+        INVALID_HANDLE_VALUE,
+        "CreateToolhelp32Snapshot failed: {}",
+        std::io::Error::last_os_error()
+    );
+
+    let mut children = Vec::new();
+    let mut entry = PROCESSENTRY32W {
+        dwSize: size_of::<PROCESSENTRY32W>() as u32,
+        ..Default::default()
+    };
+    if unsafe { Process32FirstW(snapshot, &raw mut entry) } != 0 {
+        loop {
+            if entry.th32ParentProcessID == parent_pid && process_is_alive(entry.th32ProcessID) {
+                let name_end = entry
+                    .szExeFile
+                    .iter()
+                    .position(|&character| character == 0)
+                    .unwrap_or(entry.szExeFile.len());
+                children.push((
+                    entry.th32ProcessID,
+                    String::from_utf16_lossy(&entry.szExeFile[..name_end]),
+                ));
+            }
+            if unsafe { Process32NextW(snapshot, &raw mut entry) } == 0 {
+                break;
+            }
+        }
+    }
+    unsafe {
+        CloseHandle(snapshot);
+    }
+    children
+}
+
+fn terminate_processes(processes: &[(u32, String)]) {
+    for (pid, _) in processes {
+        let process = unsafe { OpenProcess(PROCESS_TERMINATE | PROCESS_SYNCHRONIZE, 0, *pid) };
+        if !process.is_null() {
+            unsafe {
+                TerminateProcess(process, 125);
+                WaitForSingleObject(process, 2000);
+                CloseHandle(process);
+            }
+        }
+    }
+}
+
+fn assert_no_child_processes(parent_pid: u32) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let children = child_processes(parent_pid);
+        if children.is_empty() {
+            return;
+        }
+        if Instant::now() >= deadline {
+            terminate_processes(&children);
+            panic!("jrun {parent_pid} left child processes alive: {children:?}");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 fn finish_child(mut child: Child, timeout: Duration) -> (ExitStatus, String) {
     let deadline = Instant::now() + timeout;
     loop {
@@ -216,6 +288,10 @@ fn run_ctrl_scenario(
 
 fn exit_fixture() {
     std::process::exit(37);
+}
+
+fn hold_fixture() {
+    std::thread::sleep(Duration::from_secs(30));
 }
 
 #[allow(clippy::zombie_processes)] // The test requires the child to outlive its root.
@@ -313,6 +389,7 @@ fn signal_console_fixture() {
 fn fixture_entry() {
     match std::env::var(TEST_FIXTURE).as_deref() {
         Ok("exit") => exit_fixture(),
+        Ok("hold") => hold_fixture(),
         Ok("orphan") => orphan_fixture(),
         Ok("ctrl") => ctrl_fixture(),
         Ok("signal") => signal_console_fixture(),
@@ -418,6 +495,39 @@ fn kills_leftover_descendants_after_normal_root_exit() {
     assert_eq!(status.code(), Some(0));
     assert!(stderr.is_empty());
     wait_until_dead(read_pid(&child_pid_path));
+}
+
+#[test]
+fn abrupt_startup_exit_leaves_no_child_process() {
+    let directory = TestDir::new("startup-exit");
+    let mut observed_child = false;
+
+    for attempt in 0..128 {
+        let mut child = spawn_jrun_fixture("hold", &directory.0);
+        let jrun_pid = child.id();
+        let delay = if attempt == 127 {
+            Duration::from_millis(100)
+        } else {
+            Duration::from_micros(attempt * 50)
+        };
+        let deadline = Instant::now() + delay;
+        while Instant::now() < deadline {
+            std::hint::spin_loop();
+        }
+        if attempt == 127 {
+            observed_child = !child_processes(jrun_pid).is_empty();
+        }
+
+        let _ = child.kill();
+        child.wait().unwrap();
+        drop(child);
+        assert_no_child_processes(jrun_pid);
+    }
+
+    assert!(
+        observed_child,
+        "the startup stress test never reached CreateProcessW"
+    );
 }
 
 #[test]

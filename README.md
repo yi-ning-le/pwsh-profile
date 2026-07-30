@@ -18,7 +18,7 @@ See [Feature Reference](docs/FEATURES.md) for a detailed description of runtime 
 - Zsh-style path completion: `/` only inserts a separator, Tab performs case-insensitive segment-prefix completion, directories end in `/`, and hidden entries require an explicit `.` prefix.
 - Carapace external command completion, prewarmed on the first interactive idle, plus status-aware git path completion.
 - `fnm` Node.js auto-switching with asynchronous interactive prewarming and on-demand fallback for `node`, `npm`, `npx`, `pnpm`, `yarn`, and `corepack`.
-- `jrun` keeps native commands in the current Windows console while a Job Object contains their process tree. The first Ctrl+C allows up to three seconds for graceful shutdown; a second Ctrl+C or the deadline terminates the tree and returns 130. `npm run` and `npm run-script` use it automatically.
+- `jrun` keeps native commands in the current Windows console while a Job Object contains their process tree. The suspended root process joins the Job atomically during creation, so an abrupt `jrun` exit cannot strand it. The first Ctrl+C allows up to three seconds for graceful shutdown; a second Ctrl+C or the deadline terminates the tree and returns 130. `npm run` and `npm run-script` use it automatically.
 - Oh-my-zsh-style git aliases and directory navigation shortcuts.
 - Unix muscle-memory helpers such as `which`, `whereis`, `touch`, `mkcd`, `head`, `tail`, `export`, `env`, `open`, `df`, `refreshenv`, and `reload`.
 - Direct modern CLI wrappers:
