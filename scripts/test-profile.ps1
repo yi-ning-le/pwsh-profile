@@ -1471,6 +1471,9 @@ exit 0
         'echo npm-job-ok'
         'exit /b 0'
     )
+    Set-Content -LiteralPath (Join-Path $fakeFnmDir 'npm.ps1') -Value "throw 'npm.ps1 must not handle npm run'"
+    Copy-Item -LiteralPath $env:ComSpec -Destination (Join-Path $fakeFnmDir 'pnpm.exe')
+    Set-Content -LiteralPath (Join-Path $fakeFnmDir 'pnpm.cmd') -Encoding ASCII -Value '@exit /b 0'
     $env:PATH = "$fakeFnmDir;$oldPath"
     $fnmSuccessScript = @'
 $ErrorActionPreference = 'Stop'
@@ -1484,9 +1487,15 @@ if ($fnmState.Status -cne 'NotStarted') { throw 'batch session prewarmed fnm' }
 if (-not (Test-Path function:\node)) { throw 'node wrapper was not installed before fnm initialization' }
 $version = node --version
 $npmOutput = npm run build
+$resolvedNpm = & $module { (Resolve-PwshNativeCommand -Name 'npm').Source }
+$resolvedPnpm = & $module { (Resolve-PwshNativeCommand -Name 'pnpm').Source }
 if ($version -cne 'v99.0.0' -or $npmOutput -cne 'npm-job-ok' -or
     $env:PWSH_FNM_APPLIED -cne 'true' -or $fnmState.Status -cne 'Ready') {
     throw 'node wrapper did not wait for and apply fnm JSON'
+}
+if ([System.IO.Path]::GetExtension($resolvedNpm) -cne '.cmd' -or
+    [System.IO.Path]::GetExtension($resolvedPnpm) -cne '.exe') {
+    throw 'native command extension preference was invalid'
 }
 if ($env:LOCALAPPDATA -cne $parentLocalAppData) { throw 'fnm initialization changed parent LOCALAPPDATA' }
 $fnmState.Remove('SchemaVersion')
