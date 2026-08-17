@@ -21,11 +21,23 @@ function Resolve-PwshNativeCommand {
     $hasExtensionOrPath = [System.IO.Path]::GetExtension($Name) -or
         $Name.Contains([System.IO.Path]::DirectorySeparatorChar) -or
         $Name.Contains([System.IO.Path]::AltDirectorySeparatorChar)
-    $candidates = if ($hasExtensionOrPath) { @($Name) } else { @("$Name.exe", "$Name.cmd", "$Name.bat", $Name) }
-    $command = Get-Command $candidates -CommandType Application, ExternalScript -ErrorAction SilentlyContinue |
-        Select-Object -First 1
-    if (-not $command) { throw "Native command not found: $Name" }
-    $command
+    $candidates = if ($hasExtensionOrPath) {
+        $Name
+    }
+    else {
+        switch ($Name) {
+            'node' { 'node.exe'; $Name; break }
+            'npm' { 'npm.cmd'; $Name; break }
+            default { "$Name.exe"; "$Name.cmd"; "$Name.bat"; $Name }
+        }
+    }
+
+    foreach ($candidate in $candidates) {
+        $command = Get-Command $candidate -CommandType Application, ExternalScript -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+        if ($command) { return $command }
+    }
+    throw "Native command not found: $Name"
 }
 
 function Invoke-JobProcess {
