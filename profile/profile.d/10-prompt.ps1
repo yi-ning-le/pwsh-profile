@@ -1039,7 +1039,6 @@ function prompt {
         $lastCommandSucceeded = if ($null -ne $script:State.Prompt.__LeanPromptStatusOverride) {
             [bool]$script:State.Prompt.__LeanPromptStatusOverride
         } else { $pipelineSucceeded }
-        if (Test-Path function:\Update-FnmEnvironmentForPrompt) { Update-FnmEnvironmentForPrompt }
         $palette = $script:State.Prompt.LeanPromptPalette
         $gitText = Get-AsyncGitStatusText
         $rightParts = @()

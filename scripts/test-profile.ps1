@@ -59,7 +59,7 @@ $checks = [ordered]@{
     DirectRg = $content -match '(?s)function\s+grep\s*\{.*?\brg\b'
     NoGitInternalRefParsing = $content -notmatch '\.git[\\/](HEAD|refs)'
     NoLegacyScriptState = $content -notmatch '\$script:__[A-Za-z0-9_]+'
-    NoGlobalInternalState = $content -notmatch '\$global:__(Async|Fnm|LeanPrompt|Pwsh)[A-Za-z0-9_]*'
+    NoGlobalInternalState = $content -notmatch '\$global:__(Async|LeanPrompt|Pwsh)[A-Za-z0-9_]*'
     NoGlobalPromptConfiguration = $content -notmatch '\$global:LeanPrompt(Palette|SymbolsBySet|SymbolSet)'
 }
 
@@ -299,7 +299,7 @@ $expectedFunctions = @(
     'which', 'whereis', 'touch', 'mkcd', 'head', 'tail'
     'export', 'env', 'open', 'df', 'Update-Path'
 )
-$optionalFunctions = 'TabExpansion2', 'node', 'npm', 'npx', 'pnpm', 'yarn', 'corepack'
+$optionalFunctions = 'TabExpansion2', 'npm'
 $actualFunctions = @($module.ExportedFunctions.Keys | Sort-Object)
 $missingFunctions = @($expectedFunctions | Where-Object { $_ -notin $actualFunctions })
 $unexpectedFunctions = @($actualFunctions | Where-Object { $_ -notin $expectedFunctions -and $_ -notin $optionalFunctions })
@@ -311,7 +311,7 @@ if (($actualAliases -join ',') -cne 'refreshenv,xdg-open') {
     throw "module alias surface mismatch: [$($actualAliases -join ',')]"
 }
 if (-not (Test-Path function:\reload)) { throw 'entry profile did not install the reload bridge' }
-$leakedVariables = @(Get-Variable -Scope Global | Where-Object Name -Match '^__(Async|Fnm|LeanPrompt|Pwsh)')
+$leakedVariables = @(Get-Variable -Scope Global | Where-Object Name -Match '^__(Async|LeanPrompt|Pwsh)')
 if ($leakedVariables.Count) { throw "profile leaked internal global variables: [$($leakedVariables.Name -join ',')]" }
 $entryVariables = @(
     'profileModulePath', 'profileModule', 'restoreProfileCallerState',
@@ -1448,153 +1448,46 @@ exit 0
         Write-Host '[SKIP] NativePathCompletionCaseSmoke (carapace is not installed)'
     }
 
-    $fakeFnmDir = Join-Path $testRoot 'fake-fnm'
-    New-Item -ItemType Directory -Force -Path $fakeFnmDir | Out-Null
-    $env:PWSH_FNM_LOG = Join-Path $fakeFnmDir 'calls.log'
-    $env:PWSH_FNM_MULTISHELL = $fakeFnmDir -replace '\\', '/'
-    Set-Content -LiteralPath (Join-Path $fakeFnmDir 'fnm.cmd') -Encoding ASCII -Value @(
+    $fakeNodeDir = Join-Path $testRoot 'fake-node'
+    New-Item -ItemType Directory -Force -Path $fakeNodeDir | Out-Null
+    $env:PWSH_NODE_LOG = Join-Path $fakeNodeDir 'calls.log'
+    Set-Content -LiteralPath (Join-Path $fakeNodeDir 'npm.cmd') -Encoding ASCII -Value @(
         '@echo off'
-        'echo %*>>"%PWSH_FNM_LOG%"'
-        'if /I "%~1"=="env" echo LOCALAPPDATA=%LOCALAPPDATA%>>"%PWSH_FNM_LOG%"'
-        'if /I "%~1"=="env" echo {"FNM_MULTISHELL_PATH":"%PWSH_FNM_MULTISHELL%","PWSH_FNM_APPLIED":"true"}'
-        'exit /b 0'
-    )
-    Set-Content -LiteralPath (Join-Path $fakeFnmDir 'node.cmd') -Encoding ASCII -Value @(
-        '@echo off'
-        'echo node %*>>"%PWSH_FNM_LOG%"'
-        'echo v99.0.0'
-        'exit /b 0'
-    )
-    Set-Content -LiteralPath (Join-Path $fakeFnmDir 'npm.cmd') -Encoding ASCII -Value @(
-        '@echo off'
-        'echo npm "%~1" "%~2">>"%PWSH_FNM_LOG%"'
+        'echo npm "%~1" "%~2">>"%PWSH_NODE_LOG%"'
         'echo npm-job-ok'
         'exit /b 0'
     )
-    Set-Content -LiteralPath (Join-Path $fakeFnmDir 'npm.ps1') -Value "throw 'npm.ps1 must not handle npm run'"
-    Copy-Item -LiteralPath $env:ComSpec -Destination (Join-Path $fakeFnmDir 'pnpm.exe')
-    Set-Content -LiteralPath (Join-Path $fakeFnmDir 'pnpm.cmd') -Encoding ASCII -Value '@exit /b 0'
-    $env:PATH = "$fakeFnmDir;$oldPath"
-    $fnmSuccessScript = @'
+    Set-Content -LiteralPath (Join-Path $fakeNodeDir 'node.cmd') -Encoding ASCII -Value @(
+        '@echo off'
+        'echo node-cwd=%CD%>>"%PWSH_NODE_LOG%"'
+        'echo v99.0.0'
+        'exit /b 0'
+    )
+    Set-Content -LiteralPath (Join-Path $fakeNodeDir 'npm.ps1') -Value "throw 'npm.ps1 must not handle npm run'"
+    Copy-Item -LiteralPath $env:ComSpec -Destination (Join-Path $fakeNodeDir 'pnpm.exe')
+    Set-Content -LiteralPath (Join-Path $fakeNodeDir 'pnpm.cmd') -Encoding ASCII -Value '@exit /b 0'
+    $env:PATH = "$fakeNodeDir;$oldPath"
+    $npmWrapperScript = @'
 $ErrorActionPreference = 'Stop'
 $WarningPreference = 'Stop'
-$env:CODEX_SHELL = '1'
-$parentLocalAppData = $env:LOCALAPPDATA
 . $env:PWSH_PROFILE_SOURCE
 $module = Get-Module PwshProfile -ErrorAction Stop
-$fnmState = & $module { $script:State.Fnm }
-if ($fnmState.Status -cne 'NotStarted') { throw 'batch session prewarmed fnm' }
-if (-not (Test-Path function:\node)) { throw 'node wrapper was not installed before fnm initialization' }
-$version = node --version
+if (-not (Test-Path function:\npm)) { throw 'npm wrapper was not installed' }
 $npmOutput = npm run build
+if ($npmOutput -cne 'npm-job-ok') { throw 'npm run was not routed through the job runner' }
 $resolvedNpm = & $module { (Resolve-PwshNativeCommand -Name 'npm').Source }
 $resolvedPnpm = & $module { (Resolve-PwshNativeCommand -Name 'pnpm').Source }
-if ($version -cne 'v99.0.0' -or $npmOutput -cne 'npm-job-ok' -or
-    $env:PWSH_FNM_APPLIED -cne 'true' -or $fnmState.Status -cne 'Ready') {
-    throw 'node wrapper did not wait for and apply fnm JSON'
-}
 if ([System.IO.Path]::GetExtension($resolvedNpm) -cne '.cmd' -or
     [System.IO.Path]::GetExtension($resolvedPnpm) -cne '.exe') {
     throw 'native command extension preference was invalid'
 }
-if ($env:LOCALAPPDATA -cne $parentLocalAppData) { throw 'fnm initialization changed parent LOCALAPPDATA' }
-$fnmState.Remove('SchemaVersion')
-. $env:PWSH_PROFILE_SOURCE
-$module = Get-Module PwshProfile -ErrorAction Stop
-$freshFnmState = & $module { $script:State.Fnm }
-if ($freshFnmState.SchemaVersion -ne 1 -or $freshFnmState.Status -cne 'NotStarted' -or
-    -not $freshFnmState.ContainsKey('WarningShown') -or [object]::ReferenceEquals($freshFnmState, $fnmState)) {
-    throw 'reload did not create fresh module-private fnm state'
-}
 exit 0
 '@
-    Invoke-PwshChecked -Name 'FnmSingleInitializationSmoke' -Arguments @('-NoLogo', '-NoProfile', '-Command', $fnmSuccessScript)
-    $fnmCalls = @(Get-Content -LiteralPath $env:PWSH_FNM_LOG)
-    if (@($fnmCalls | Where-Object { $_ -ceq 'env --json --resolve-engines=false' }).Count -ne 1 -or
-        @($fnmCalls | Where-Object { $_ -ceq 'node --version' }).Count -ne 1 -or
-        @($fnmCalls | Where-Object { $_ -ceq 'npm "run" "build"' }).Count -ne 1 -or
-        @($fnmCalls | Where-Object { $_ -ceq "LOCALAPPDATA=$env:TEMP" }).Count -ne 1) {
-        throw "fnm initialization calls were invalid: [$($fnmCalls -join '; ')]"
+    Invoke-PwshChecked -Name 'NpmWrapperSmoke' -Arguments @('-NoLogo', '-NoProfile', '-Command', $npmWrapperScript)
+    $npmCalls = @(Get-Content -LiteralPath $env:PWSH_NODE_LOG)
+    if (@($npmCalls | Where-Object { $_ -ceq 'npm "run" "build"' }).Count -ne 1) {
+        throw "npm job-runner calls were invalid: [$($npmCalls -join '; ')]"
     }
-
-    Clear-Content -LiteralPath $env:PWSH_FNM_LOG
-    $fnmShadowScriptPath = Join-Path $testRoot 'fnm-script-state-shadow.ps1'
-    Set-Content -LiteralPath $fnmShadowScriptPath -Value @'
-$ErrorActionPreference = 'Stop'
-$WarningPreference = 'Stop'
-. $env:PWSH_PROFILE_SOURCE
-$script:__FnmState = [pscustomobject]@{ Status = 'Unavailable'; UseRetryAttempted = $true }
-$version = node --version
-$module = Get-Module PwshProfile -ErrorAction Stop
-$fnmState = & $module { $script:State.Fnm }
-if ($version -cne 'v99.0.0' -or $fnmState.Status -cne 'Ready') {
-    throw 'caller script state shadowed module-private fnm state'
-}
-exit 0
-'@
-    Invoke-PwshChecked -Name 'FnmScriptStateShadowSmoke' -Arguments @(
-        '-NoLogo', '-NoProfile', '-File', $fnmShadowScriptPath
-    )
-    $fnmCalls = @(Get-Content -LiteralPath $env:PWSH_FNM_LOG)
-    if (@($fnmCalls | Where-Object { $_ -ceq 'env --json --resolve-engines=false' }).Count -ne 1 -or
-        @($fnmCalls | Where-Object { $_ -ceq 'node --version' }).Count -ne 1) {
-        throw "script-scoped fnm initialization calls were invalid: [$($fnmCalls -join '; ')]"
-    }
-
-    Clear-Content -LiteralPath $env:PWSH_FNM_LOG
-    Set-Content -LiteralPath (Join-Path $fakeFnmDir 'fnm.cmd') -Encoding ASCII -Value @(
-        '@echo off'
-        'echo %*>>"%PWSH_FNM_LOG%"'
-        'if /I "%~1"=="env" ping -n 3 127.0.0.1 >nul'
-        'if /I "%~1"=="env" echo {"FNM_MULTISHELL_PATH":"%PWSH_FNM_MULTISHELL%","PWSH_FNM_APPLIED":"true"}'
-        'exit /b 0'
-    )
-    $env:PWSH_FNM_VERSION_DIR = Join-Path $fakeFnmDir 'version-project'
-    New-Item -ItemType Directory -Force -Path $env:PWSH_FNM_VERSION_DIR | Out-Null
-    Set-Content -LiteralPath (Join-Path $env:PWSH_FNM_VERSION_DIR '.nvmrc') -Value '99'
-$fnmPrewarmScript = @'
-$ErrorActionPreference = 'Stop'
-$WarningPreference = 'Stop'
-$script:State = @{ Session = @{ IsInteractive = $true } }
-$nodePart = Join-Path (Split-Path -Parent $env:PWSH_PROFILE_SOURCE) 'profile.d\20-node.ps1'
-$sw = [Diagnostics.Stopwatch]::StartNew()
-. $nodePart
-. $nodePart
-$sw.Stop()
-if ($sw.Elapsed.TotalMilliseconds -gt 500 -or $script:State.Fnm.Status -cne 'Running') {
-    throw "slow fnm prewarm blocked profile sourcing or did not remain running: $($sw.Elapsed.TotalMilliseconds)ms/$($script:State.Fnm.Status)"
-}
-if (Complete-FnmEnvironmentInitialization) { throw 'nonblocking fnm completion waited for a running process' }
-if (-not (Complete-FnmEnvironmentInitialization -Wait) -or $script:State.Fnm.Status -cne 'Ready') {
-    throw 'fnm prewarm result was not applied'
-}
-Set-Location $env:PWSH_FNM_VERSION_DIR
-Update-FnmEnvironmentForPrompt
-Update-FnmEnvironmentForPrompt
-exit 0
-'@
-    Invoke-PwshChecked -Name 'FnmAsyncPrewarmSmoke' -Arguments @('-NoLogo', '-NoProfile', '-Command', $fnmPrewarmScript)
-    $fnmCalls = @(Get-Content -LiteralPath $env:PWSH_FNM_LOG)
-    if (@($fnmCalls | Where-Object { $_ -ceq 'env --json --resolve-engines=false' }).Count -ne 1 -or
-        @($fnmCalls | Where-Object { $_ -ceq 'use --silent-if-unchanged' }).Count -ne 1) {
-        throw "fnm async/reload/use calls were invalid: [$($fnmCalls -join '; ')]"
-    }
-
-    Clear-Content -LiteralPath $env:PWSH_FNM_LOG
-    Set-Content -LiteralPath (Join-Path $fakeFnmDir 'fnm.cmd') -Encoding ASCII -Value "@echo off`r`necho %*>>`"%PWSH_FNM_LOG%`"`r`nexit /b 1"
-    $fnmFailureScript = @'
-$ErrorActionPreference = 'Stop'
-$WarningPreference = 'SilentlyContinue'
-. $env:PWSH_PROFILE_SOURCE
-$module = Get-Module PwshProfile -ErrorAction Stop
-$fnmState = & $module { $script:State.Fnm }
-if (-not (Test-Path function:\node) -or $fnmState.Status -cne 'NotStarted') { throw 'batch fnm wrapper/state was invalid' }
-if (& $module { Initialize-FnmForUse }) { throw 'failed fnm initialization reported success' }
-if ($fnmState.Status -cne 'Unavailable') { throw 'failed fnm initialization did not become unavailable' }
-if (-not (Test-Path function:\icons) -or -not (Test-Path function:\grep)) { throw 'profile loading stopped after fnm failure' }
-exit 0
-'@
-    Invoke-PwshChecked -Name 'FnmFailureSmoke' -Arguments @('-NoLogo', '-NoProfile', '-Command', $fnmFailureScript)
     $env:PATH = $oldPath
 
     $moduleLifecycleSmokeScript = @'
@@ -1645,8 +1538,6 @@ foreach ($cycle in 1..10) {
     $cacheDir = $state.Prompt.__AsyncGitStatusCacheDir
     $prewarmSubscriptionId = $state.Completion.CompletionPrewarmSubscriptionId
     $exitSubscriptionId = $state.Prompt.__LeanPromptAsyncGitExitSubscriptionId
-    $fnmProcess = if ($state.Fnm -is [hashtable]) { $state.Fnm.Process }
-    $fnmProcessId = if ($fnmProcess) { try { $fnmProcess.Id } catch { $null } }
 
     Remove-Module PwshProfile -Force
     if (Get-Module PwshProfile) { throw "cycle $cycle did not remove the profile module" }
@@ -1662,10 +1553,6 @@ foreach ($cycle in 1..10) {
         }
     }
     if (Test-Path -LiteralPath $cacheDir) { throw "cycle $cycle leaked the prompt cache" }
-    if ($state.Fnm.Process) { throw "cycle $cycle retained its fnm process reference" }
-    if ($fnmProcessId -and (Get-Process -Id $fnmProcessId -ErrorAction SilentlyContinue)) {
-        throw "cycle $cycle left fnm initialization process $fnmProcessId running"
-    }
     $restoredAlias = Get-Alias -Name ls -ErrorAction Stop
     if ($restoredAlias.Definition -cne 'Get-ChildItem') { throw "cycle $cycle did not restore the ls alias" }
 }
@@ -2565,14 +2452,20 @@ exit 0
     $toolLock = Join-Path $updaterRoot 'toolchain.lock'
     $toolProject = Join-Path $testRoot 'toolchain-project'
     New-Item -ItemType Directory -Force -Path $toolProject | Out-Null
+    Set-Content -LiteralPath (Join-Path $toolProject '.node-version') -Value '99.0.0'
     Set-Content -LiteralPath (Join-Path $toolProject '.python-version') -Value '3.13.1'
+    $env:PATH = "$fakeNodeDir;$oldPath"
     New-Item -ItemType File -Path $toolLock | Out-Null
     Invoke-PwshChecked -Name 'ToolchainUpdaterSmoke' -Arguments @(
         '-NoLogo', '-NoProfile', '-File', (Join-Path $profilePartsDir 'prompt-updaters\Update-AsyncToolchainStatus.ps1'),
         '-Cwd', $toolProject, '-CachePath', $toolCache, '-LockPath', $toolLock
     )
     $toolStatus = Get-Content -LiteralPath $toolCache -Raw | ConvertFrom-Json
-    if (-not $toolStatus.IsProject -or $toolStatus.Text -notmatch 'py 3\.13\.1') { throw 'toolchain updater positive cache is invalid' }
+    if (-not $toolStatus.IsProject -or $toolStatus.Text -cne 'node v99.0.0 py 3.13.1') { throw 'toolchain updater positive cache is invalid' }
+    $nodeCwd = Get-Content -LiteralPath $env:PWSH_NODE_LOG | Where-Object { $_ -like 'node-cwd=*' } | Select-Object -First 1
+    if (-not $nodeCwd -or $nodeCwd.Substring('node-cwd='.Length) -cne $toolProject) {
+        throw 'toolchain updater did not run node from the project directory'
+    }
     $toolUpdated = [string]$toolStatus.Updated
     (Get-Item -LiteralPath $toolCache).LastWriteTimeUtc = [datetime]::UtcNow.AddMinutes(-1)
     $oldToolWriteUtc = (Get-Item -LiteralPath $toolCache).LastWriteTimeUtc
@@ -2589,6 +2482,7 @@ exit 0
     if (@(Get-ChildItem -LiteralPath $updaterRoot -Filter '*.lock').Count -or @(Get-ChildItem -LiteralPath $updaterRoot -Filter '*.tmp').Count) {
         throw 'updater left lock or temporary files behind'
     }
+    $env:PATH = $oldPath
 
     Measure-PwshStartup -Name 'NoProfile' -Arguments @('-NoLogo', '-NoProfile', '-Command', '$null') -SampleCount $Runs
     Measure-PwshStartup -Name 'BatchSourceProfile' -Arguments @('-NoLogo', '-NoProfile', '-File', $profileSource) -SampleCount $Runs
@@ -2606,7 +2500,7 @@ finally {
     Remove-Item Env:PWSH_PROFILE_SOURCE, Env:PWSH_COMPLETION_TEST_ROOT, Env:PWSH_ZSH_COMPLETION_ROOT, `
         Env:PWSH_GIT_PROMPT_ROOT, Env:PWSH_GIT_PROMPT_SEED, `
         Env:PWSH_INSTALL_SCRIPT, Env:PWSH_INSTALL_TARGET, Env:PWSH_WINGET_SCRIPT, `
-        Env:PWSH_WINGET_LOG, Env:PWSH_WINGET_PATH, Env:PWSH_FNM_LOG, `
+        Env:PWSH_WINGET_LOG, Env:PWSH_WINGET_PATH, Env:PWSH_NODE_LOG, `
         Env:PWSH_CARAPACE_LOG, Env:PWSH_CARAPACE_TEST_LOCALAPPDATA, Env:PWSH_CARAPACE_EMPTY_PATH, `
         Env:PWSH_CARAPACE_PWSH, Env:PWSH_CARAPACE_MODE, Env:PWSH_JOB_SMOKE_ROOT -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue
