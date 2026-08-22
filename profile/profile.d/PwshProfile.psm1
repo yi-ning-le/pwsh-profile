@@ -3,7 +3,6 @@ param([switch] $ForceInteractive)
 $script:State = @{
     SchemaVersion = 1
     Session = @{}
-    Fnm = $null
     Prompt = @{}
     Completion = @{}
     Resources = @{
@@ -28,19 +27,6 @@ function Stop-PwshProfileRuntime {
 
     if (Get-Command Disable-LeanPromptAsyncRedraw -CommandType Function -ErrorAction SilentlyContinue) {
         Disable-LeanPromptAsyncRedraw
-    }
-
-    $fnmProcess = if ($script:State.Fnm -is [hashtable]) { $script:State.Fnm.Process }
-    if ($fnmProcess) {
-        try {
-            if (-not $fnmProcess.HasExited) {
-                $fnmProcess.Kill($true)
-                [void] $fnmProcess.WaitForExit(1000)
-            }
-        }
-        catch {}
-        finally { try { $fnmProcess.Dispose() } catch {} }
-        $script:State.Fnm.Process = $null
     }
 
     $completion = $script:State.Completion
@@ -111,7 +97,7 @@ foreach ($profilePart in $profileParts) {
 $publicFunctions = @(
     'prompt', 'TabExpansion2', 'Set-LeanPromptSymbolSet', 'Test-LeanPromptGlyphs'
     'Invoke-JobProcess', 'jrun'
-    'node', 'npm', 'npx', 'pnpm', 'yarn', 'corepack'
+    'npm'
     'icons'
     'ls', 'l', 'll', 'la', 'lt'
     'pwd', 'mkdir', '..', '...', '....'

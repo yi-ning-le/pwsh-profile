@@ -17,7 +17,7 @@ See [Feature Reference](docs/FEATURES.md) for a detailed description of runtime 
 - PSReadLine history suggestions, prefix history search, and menu completion on the first Tab for interactive sessions.
 - Zsh-style path completion: `/` only inserts a separator, Tab performs case-insensitive segment-prefix completion, directories end in `/`, and hidden entries require an explicit `.` prefix.
 - Carapace external command completion, prewarmed on the first interactive idle, plus status-aware git path completion.
-- `fnm` Node.js auto-switching with asynchronous interactive prewarming and on-demand fallback for `node`, `npm`, `npx`, `pnpm`, `yarn`, and `corepack`.
+- Node.js comes from `mise` shims on `PATH`; the profile wraps only `npm` so `npm run` executes under the Job Object runner.
 - `jrun` keeps native commands in the current Windows console while a Job Object contains their process tree. The suspended root process joins the Job atomically during creation, so an abrupt `jrun` exit cannot strand it. The first Ctrl+C allows up to three seconds for graceful shutdown; a second Ctrl+C or the deadline terminates the tree and returns 130. `npm run` and `npm run-script` use it automatically.
 - Oh-my-zsh-style git aliases and directory navigation shortcuts.
 - Unix muscle-memory helpers such as `which`, `whereis`, `touch`, `mkcd`, `head`, `tail`, `export`, `env`, `open`, `df`, `refreshenv`, and `reload`.
@@ -33,7 +33,7 @@ See [Feature Reference](docs/FEATURES.md) for a detailed description of runtime 
 profile/Microsoft.PowerShell_profile.ps1      entrypoint installed to $PROFILE.CurrentUserCurrentHost
 profile/profile.d/10-prompt.ps1              prompt, async cache orchestration, background process helper
 profile/profile.d/15-job-object.ps1          installed Rust helper discovery and jrun PowerShell wrapper
-profile/profile.d/20-node.ps1                fnm asynchronous environment initialization and Node wrappers
+profile/profile.d/20-node.ps1                npm wrapper routing npm run through the job runner
 profile/profile.d/25-icons.ps1               on-demand Terminal-Icons helper
 profile/profile.d/30-psreadline.ps1          PSReadLine options, keybindings, duration tracking
 profile/profile.d/40-completion.ps1          generic path routing, carapace cache, git path completion
@@ -98,15 +98,13 @@ Command duration is shown only for slower commands:
 
 The right prompt shows project-local versions only when marker files are present:
 
-- Node: `.node-version` or `.nvmrc`, using `fnm use --silent-if-unchanged` and `node -v`.
+- Node: `.node-version` or `.nvmrc`, using `node -v`.
 - Python: `.python-version`.
 - Go: `go` directive in `go.mod`.
 - Rust: `rust-toolchain.toml` or `rust-toolchain`.
 - .NET: `sdk.version` in `global.json`.
 
 Toolchain status is refreshed asynchronously and cached briefly, so prompt rendering does not block on version probes.
-
-Interactive sessions also start `fnm env --json` in the background while the rest of the profile loads. Node command wrappers wait for that result on first use and retry initialization once if prewarming failed; non-interactive command and file sessions initialize only when a Node command is used.
 
 ## Completion And Editing
 
@@ -170,7 +168,7 @@ which whereis touch mkcd head tail export env open xdg-open df refreshenv reload
 - lsd
 - bat
 - ripgrep (`rg`)
-- fnm
+- mise (with a global Node.js pin, e.g. `mise use -g node@24`)
 - carapace
 - Rust MSVC toolchain (`cargo`), used to compile `jrun` during installation and run its Rust tests during validation
 
@@ -202,7 +200,7 @@ To skip permanent backups (rollback protection is still used during installation
 .\packages\winget.ps1
 ```
 
-The winget script installs Git, lsd, bat, ripgrep, fnm, Carapace, and Rustup using exact package IDs. It stops at the first failed package and reports its ID and native exit code. Review the package list before running it on a new machine.
+The winget script installs Git, lsd, bat, ripgrep, mise, Carapace, and Rustup using exact package IDs. It stops at the first failed package and reports its ID and native exit code. Review the package list before running it on a new machine.
 
 ## Verify
 

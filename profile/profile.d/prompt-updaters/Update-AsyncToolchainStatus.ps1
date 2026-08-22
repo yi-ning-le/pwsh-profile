@@ -8,6 +8,7 @@ $ErrorActionPreference = 'SilentlyContinue'
 try {
     $cacheDir = Split-Path -Parent $CachePath
     New-Item -ItemType Directory -Force -Path $cacheDir | Out-Null
+    Set-Location -LiteralPath $Cwd -ErrorAction Stop
     $parts = @()
 
     $nodeVersionFile = $null
@@ -16,8 +17,6 @@ try {
         if (Test-Path -LiteralPath $candidate) { $nodeVersionFile = $candidate; break }
     }
     if ($nodeVersionFile) {
-        $nodeVersion = ''
-        & fnm use --silent-if-unchanged *> $null
         $nodeVersion = (& node -v 2>$null | Select-Object -First 1).Trim()
         if (-not $nodeVersion) { $nodeVersion = (Get-Content -LiteralPath $nodeVersionFile -ErrorAction SilentlyContinue | Where-Object { $_.Trim() } | Select-Object -First 1).Trim() }
         if ($nodeVersion) { $parts += "node $nodeVersion" }

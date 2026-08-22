@@ -20,7 +20,7 @@ The `profile/` tree is the source of truth. The installed profile is a synchroni
 The following parts load in every supported session:
 
 - `15-job-object.ps1`: `jrun`, native command resolution, and discovery of the helper built by the installer.
-- `20-node.ps1`: fnm discovery, environment state, and Node command wrappers.
+- `20-node.ps1`: the `npm` wrapper that routes `npm run` through the job runner.
 - `10-prompt.ps1`: prompt rendering, project-path logic, async status caches, and background process helpers.
 - `25-icons.ps1`: the on-demand Terminal-Icons helper.
 - `50-aliases.ps1`: navigation shortcuts, Git aliases, and direct modern CLI wrappers.
@@ -150,7 +150,7 @@ The right prompt can show project-local versions for:
 
 | Toolchain | Marker | Display source |
 |---|---|---|
-| Node.js | `.node-version` or `.nvmrc` | `node -v` after `fnm use --silent-if-unchanged` |
+| Node.js | `.node-version` or `.nvmrc` | `node -v` |
 | Python | `.python-version` | Marker contents |
 | Go | `go.mod` | `go` directive |
 | Rust | `rust-toolchain.toml` or `rust-toolchain` | Toolchain marker |
@@ -281,30 +281,11 @@ Candidates are derived from Git status, staged paths, modified paths, tracked pa
 
 Commands that primarily complete refs or branches, such as checkout-style operations, remain with Carapace.
 
-## Node.js and fnm
+## Node.js
 
-If `fnm` is installed, the profile discovers its executable once and maintains a small session state machine: `NotStarted`, `Running`, `Ready`, or `Unavailable`.
+Node.js is provided by `mise` shims on the user `PATH`, so `node`, `npx`, and friends resolve like any other native command in every session type, including non-interactive shells and GUI-spawned processes. Version selection happens inside the shim at invocation time; the profile performs no version management.
 
-In an interactive session, `fnm env --json --resolve-engines=false` starts in a hidden process while the rest of the profile continues loading. The returned environment is applied when ready. PATH entries are merged case-insensitively without duplicating entries that already existed when initialization began.
-
-In Codex-launched shells, only the `fnm env` child process uses `$env:TEMP` as `LOCALAPPDATA`, allowing its multishell junction to be created inside the Windows sandbox without changing the parent shell environment.
-
-The following commands are wrapped:
-
-- `node`
-- `npm`
-- `npx`
-- `pnpm`
-- `yarn`
-- `corepack`
-
-On first use, a wrapper waits for fnm initialization if necessary, applies the environment, checks the current directory for `.node-version` or `.nvmrc`, runs `fnm use --silent-if-unchanged`, and then invokes the real executable with the original arguments.
-
-The prompt performs the same version-file check when changing directories. Repeated prompts in the same versioned directory do not rerun `fnm use`.
-
-Non-interactive sessions do not prewarm fnm. They initialize only if a wrapped Node command is used. A failed prewarm can be retried once on demand, and a persistent failure produces at most one warning per session.
-
-If `fnm` is not installed, this profile part returns without installing the Node wrappers.
+Only `npm` is wrapped, so `npm run` and `npm run-script` execute under the Job Object runner. All other arguments invoke the real executable directly.
 
 ### Native process-tree runner
 
@@ -400,7 +381,7 @@ Required commands:
 - `lsd`
 - `bat`
 - ripgrep (`rg`)
-- `fnm`
+- `mise`
 - Carapace
 - Rust MSVC toolchain (`cargo`), required while installing the profile and running the standard validation suite
 
@@ -497,7 +478,7 @@ Validation covers:
 - path routing, case preservation, hidden entries, slash handling, and interruption
 - Carapace lazy initialization and failure behavior
 - Git-aware path completion
-- fnm prewarm, retry, environment, and version switching
+- npm wrapper job-runner routing and native command resolution
 - installer validation, mirroring, rollback, locking, and backup behavior
 - batch and optional interactive startup benchmarks
 

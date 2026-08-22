@@ -12,12 +12,6 @@ $script:State.JobRunner = @{
 function Resolve-PwshNativeCommand {
     param([Parameter(Mandatory)][string] $Name)
 
-    if ($Name -in 'node', 'npm', 'npx', 'pnpm', 'yarn', 'corepack' -and
-        (Get-Command Initialize-FnmForUse -CommandType Function -ErrorAction SilentlyContinue)) {
-        $null = Initialize-FnmForUse
-        Update-FnmVersionForCurrentDirectory -Wait
-    }
-
     $hasExtensionOrPath = [System.IO.Path]::GetExtension($Name) -or
         $Name.Contains([System.IO.Path]::DirectorySeparatorChar) -or
         $Name.Contains([System.IO.Path]::AltDirectorySeparatorChar)

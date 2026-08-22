@@ -10,7 +10,7 @@ $packages = @(
     @{ Id = 'lsd-rs.lsd'; Name = 'lsd' },
     @{ Id = 'sharkdp.bat'; Name = 'bat' },
     @{ Id = 'BurntSushi.ripgrep.MSVC'; Name = 'ripgrep' },
-    @{ Id = 'Schniz.fnm'; Name = 'fnm' },
+    @{ Id = 'jdx.mise'; Name = 'mise' },
     @{ Id = 'rsteube.Carapace'; Name = 'Carapace' },
     @{ Id = 'Rustlang.Rustup'; Name = 'Rustup' }
 )
