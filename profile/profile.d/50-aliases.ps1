@@ -2,6 +2,9 @@
 #  Aliases (common oh-my-zsh plugin style)
 # ============================================================
 
+# ---- Editor (bundled with Git for Windows) ----
+Set-Alias vim 'C:\Program Files\Git\usr\bin\vim.exe'
+
 # ---- Directory listing (handled by lsd) ----
 # lsd = modern ls replacement: icons / color / tree view. If lsd is missing, calls fail directly.
 foreach ($a in 'ls') { if (Test-Path "Alias:$a") { Remove-Item "Alias:$a" -Force } }
@@ -49,6 +52,9 @@ function cat { bat --paging=never @args }
 
 # grep -> rg (ripgrep): faster, recursive by default, supports stdin and files/directories
 function grep { rg @args }
+
+# find -> fd: parallel traversal, respects .gitignore, `fd <pattern> [path]` syntax. Also shadows the unrelated Windows find.exe.
+function find { fd @args }
 
 # ---- curl/wget alias fix ----
 # PowerShell aliases curl/wget to Invoke-WebRequest by default, which behaves very differently from the real tools.

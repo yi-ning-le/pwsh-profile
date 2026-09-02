@@ -58,6 +58,24 @@ function tail {
     else { $input | Select-Object -Last $n }
 }
 
+# sdr: search-and-replace across every file that rg matches, using sd (literal by default, -Regex for patterns)
+#   sdr 'OldName' 'NewName'            # whole tree from the current directory
+#   sdr -Regex '(\w+)_v1' '${1}_v2' src # regex with Rust capture syntax, limited to src/
+function sdr {
+    param(
+        [Parameter(Mandatory, Position = 0)][string]$Old,
+        [Parameter(Mandatory, Position = 1)][string]$New,
+        [switch]$Regex,
+        [Parameter(ValueFromRemainingArguments)][string[]]$Path
+    )
+    if (-not $Path) { $Path = @('.') }   # explicit path: without one rg reads stdin when it is not a terminal
+    $rgArgs = @('-l'); $sdArgs = @()
+    if (-not $Regex) { $rgArgs += '-F'; $sdArgs += '-F' }
+    $files = @(rg @rgArgs -- $Old @Path)
+    if ($global:LASTEXITCODE -notin 0, 1) { throw "rg failed with exit code $global:LASTEXITCODE" }
+    if ($files.Count) { sd @sdArgs -- $Old $New @files }
+}
+
 # export NAME=value: set environment variables (like bash export)
 function export {
     param([Parameter(Mandatory, ValueFromRemainingArguments)][string[]]$Assignment)

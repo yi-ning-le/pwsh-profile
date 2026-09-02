@@ -2,7 +2,7 @@
 
 A fast personal PowerShell profile for Windows / PowerShell 7.
 
-This repo keeps the profile portable without hiding missing dependencies. Modern CLI tools such as `lsd`, `bat`, and `rg` are explicit requirements; if they are not installed, the related commands should fail visibly.
+This repo keeps the profile portable without hiding missing dependencies. Modern CLI tools such as `lsd`, `bat`, `rg`, `fd`, and `sd` are explicit requirements; if they are not installed, the related commands should fail visibly.
 
 See [Feature Reference](docs/FEATURES.md) for a detailed description of runtime behavior, key bindings, completion, background refresh, installation, and validation.
 
@@ -17,14 +17,16 @@ See [Feature Reference](docs/FEATURES.md) for a detailed description of runtime 
 - PSReadLine history suggestions, prefix history search, and menu completion on the first Tab for interactive sessions.
 - Zsh-style path completion: `/` only inserts a separator, Tab performs case-insensitive segment-prefix completion, directories end in `/`, and hidden entries require an explicit `.` prefix.
 - Carapace external command completion, prewarmed on the first interactive idle, plus status-aware git path completion.
-- Node.js comes from `mise` shims on `PATH`; the profile wraps only `npm` so `npm run` executes under the Job Object runner.
-- `jrun` keeps native commands in the current Windows console while a Job Object contains their process tree. The suspended root process joins the Job atomically during creation, so an abrupt `jrun` exit cannot strand it. The first Ctrl+C allows up to three seconds for graceful shutdown; a second Ctrl+C or the deadline terminates the tree and returns 130. `npm run` and `npm run-script` use it automatically.
+- Node.js comes from `mise` shims on `PATH`; the profile wraps `npm` and `npx` to run npm's CLI through `mise x -- node` instead of the `.cmd` batch wrappers, with `npm run` and `npx` under the Job Object runner and npm scripts in Git Bash.
+- `jrun` keeps native commands in the current Windows console while a Job Object contains their process tree. The suspended root process joins the Job atomically during creation, so an abrupt `jrun` exit cannot strand it. The first Ctrl+C allows up to three seconds for graceful shutdown; a second Ctrl+C or the deadline terminates the tree and returns 130. `npm run`, `npm run-script`, and `npx` use it automatically.
 - Oh-my-zsh-style git aliases and directory navigation shortcuts.
-- Unix muscle-memory helpers such as `which`, `whereis`, `touch`, `mkcd`, `head`, `tail`, `export`, `env`, `open`, `df`, `refreshenv`, and `reload`.
+- Unix muscle-memory helpers such as `which`, `whereis`, `touch`, `mkcd`, `head`, `tail`, `sdr`, `export`, `env`, `open`, `df`, `refreshenv`, `reload`, and `vim`.
 - Direct modern CLI wrappers:
   - `ls`, `l`, `ll`, `la`, `lt` use `lsd`.
   - `cat` uses `bat`.
   - `grep` uses `rg`.
+  - `find` uses `fd`.
+  - `sdr` runs `sd` over every file `rg` matches for tree-wide find-and-replace.
 - PowerShell's default `curl` / `wget` aliases are removed so real executables resolve from `PATH`.
 
 ## Project Structure
@@ -33,11 +35,11 @@ See [Feature Reference](docs/FEATURES.md) for a detailed description of runtime 
 profile/Microsoft.PowerShell_profile.ps1      entrypoint installed to $PROFILE.CurrentUserCurrentHost
 profile/profile.d/10-prompt.ps1              prompt, async cache orchestration, background process helper
 profile/profile.d/15-job-object.ps1          installed Rust helper discovery and jrun PowerShell wrapper
-profile/profile.d/20-node.ps1                npm wrapper routing npm run through the job runner
+profile/profile.d/20-node.ps1                npm/npx wrappers via mise and the job runner
 profile/profile.d/25-icons.ps1               on-demand Terminal-Icons helper
 profile/profile.d/30-psreadline.ps1          PSReadLine options, keybindings, duration tracking
 profile/profile.d/40-completion.ps1          generic path routing, carapace cache, git path completion
-profile/profile.d/50-aliases.ps1             lsd/bat/rg wrappers, git aliases, navigation helpers
+profile/profile.d/50-aliases.ps1             lsd/bat/rg/fd wrappers, git aliases, navigation helpers
 profile/profile.d/60-utils.ps1               small Unix-style utility functions
 profile/profile.d/job-runner/                Rust/Win32 Job Object helper source
 profile/profile.d/prompt-updaters/*.ps1      async git/toolchain updater scripts
@@ -156,21 +158,32 @@ g gst gss ga gaa gco gcb gb gc gcmsg gca gp gl gf gd gds glog gloga
 Utility helpers:
 
 ```powershell
-which whereis touch mkcd head tail export env open xdg-open df refreshenv reload icons
+which whereis touch mkcd head tail sdr export env open xdg-open df refreshenv reload icons vim
 ```
 
 `icons` loads Terminal-Icons on demand. Normal directory listing uses `lsd --icon always`, so Terminal-Icons is not loaded during startup.
 
 ## Requirements
 
-- PowerShell 7 (`pwsh`)
-- Git
-- lsd
-- bat
-- ripgrep (`rg`)
-- mise (with a global Node.js pin, e.g. `mise use -g node@24`)
-- carapace
-- Rust MSVC toolchain (`cargo`), used to compile `jrun` during installation and run its Rust tests during validation
+Use current stable releases. These are the latest versions checked on 2026-09-02, not minimum-version constraints or install pins:
+
+| Tool | Version |
+| --- | --- |
+| PowerShell | 7.6.5 |
+| Git for Windows | 2.55.0.windows.5 |
+| lsd | 1.2.0 |
+| bat | 0.26.1 |
+| ripgrep (`rg`) | 15.2.0 |
+| fd | 10.5.0 |
+| sd | 1.1.0 |
+| mise | 2026.9.0 |
+| Node.js / npm | 26.8.1 / 11.19.0 |
+| Carapace | 1.7.3 |
+| Rustup / Rust MSVC | 1.29.1 / 1.98.0 |
+
+Select the latest Node.js release globally with `mise use -g node@latest`. The Rust MSVC toolchain (`cargo`) is only needed to compile `jrun` during installation and run its Rust tests during validation.
+
+`sd` 1.1.0 still prints `sd 1.0.0` from `sd --version` because that release retained `version = "1.0.0"` in its Cargo package metadata; verify the installed package or release version instead.
 
 Optional:
 
@@ -200,7 +213,7 @@ To skip permanent backups (rollback protection is still used during installation
 .\packages\winget.ps1
 ```
 
-The winget script installs Git, lsd, bat, ripgrep, mise, Carapace, and Rustup using exact package IDs. It stops at the first failed package and reports its ID and native exit code. Review the package list before running it on a new machine.
+The winget script installs Git, lsd, bat, ripgrep, fd, sd, mise, Carapace, and Rustup using exact package IDs without version pins, so winget selects the highest version in its source. It stops at the first failed package and reports its ID and native exit code. Review the package list before running it on a new machine.
 
 ## Verify
 
@@ -232,5 +245,5 @@ Cached data includes async git status, async toolchain status, and generated Car
 
 - Keep startup and prompt paths fast.
 - Keep helper scripts readable; do not convert them to base64 blobs.
-- Do not add fallback implementations for `lsd`, `bat`, or `rg` unless the owner explicitly changes this policy.
+- Do not add fallback implementations for `lsd`, `bat`, `rg`, `fd`, or `sd` unless the owner explicitly changes this policy.
 - Do not reintroduce `zoxide` or `fzf` unless they become actively used again.

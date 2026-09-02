@@ -97,15 +97,15 @@ foreach ($profilePart in $profileParts) {
 $publicFunctions = @(
     'prompt', 'TabExpansion2', 'Set-LeanPromptSymbolSet', 'Test-LeanPromptGlyphs'
     'Invoke-JobProcess', 'jrun'
-    'npm'
+    'npm', 'npx'
     'icons'
     'ls', 'l', 'll', 'la', 'lt'
     'pwd', 'mkdir', '..', '...', '....'
     'g', 'gst', 'gss', 'ga', 'gaa', 'gco', 'gcb', 'gb', 'gc', 'gcmsg', 'gca'
     'gp', 'gl', 'gf', 'gd', 'gds', 'glog', 'gloga'
-    'cat', 'grep'
-    'which', 'whereis', 'touch', 'mkcd', 'head', 'tail'
+    'cat', 'grep', 'find'
+    'which', 'whereis', 'touch', 'mkcd', 'head', 'tail', 'sdr'
     'export', 'env', 'open', 'df', 'Update-Path'
 )
 
-Export-ModuleMember -Function $publicFunctions -Alias 'xdg-open', 'refreshenv'
+Export-ModuleMember -Function $publicFunctions -Alias 'xdg-open', 'refreshenv', 'vim'
