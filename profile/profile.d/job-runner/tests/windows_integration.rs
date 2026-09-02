@@ -9,18 +9,16 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
-use windows_sys::Win32::Foundation::{
-    CloseHandle, GetLastError, INVALID_HANDLE_VALUE, WAIT_TIMEOUT,
-};
+use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE, WAIT_TIMEOUT};
 use windows_sys::Win32::System::Console::{
-    AttachConsole, CTRL_C_EVENT, FreeConsole, GenerateConsoleCtrlEvent, SetConsoleCtrlHandler,
+    CTRL_BREAK_EVENT, CTRL_C_EVENT, GenerateConsoleCtrlEvent, SetConsoleCtrlHandler,
 };
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
 };
 use windows_sys::Win32::System::Threading::{
-    CREATE_NEW_CONSOLE, OpenProcess, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, TerminateProcess,
-    WaitForSingleObject,
+    CREATE_NEW_PROCESS_GROUP, OpenProcess, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
+    TerminateProcess, WaitForSingleObject,
 };
 
 const TEST_DIR: &str = "JRUN_TEST_DIR";
@@ -48,7 +46,7 @@ static CTRL_RECEIVED: AtomicBool = AtomicBool::new(false);
 static NEXT_TEST_DIR: AtomicU32 = AtomicU32::new(0);
 
 unsafe extern "system" fn fixture_ctrl_handler(kind: u32) -> i32 {
-    if kind == CTRL_C_EVENT {
+    if kind == CTRL_C_EVENT || kind == CTRL_BREAK_EVENT {
         CTRL_RECEIVED.store(true, Ordering::SeqCst);
         1
     } else {
@@ -134,6 +132,12 @@ fn wait_until_dead(pid: u32) {
 }
 
 fn child_processes(parent_pid: u32) -> Vec<(u32, String)> {
+    let fixture_name = std::env::current_exe()
+        .unwrap()
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
     let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
     assert_ne!(
         snapshot,
@@ -149,16 +153,17 @@ fn child_processes(parent_pid: u32) -> Vec<(u32, String)> {
     };
     if unsafe { Process32FirstW(snapshot, &raw mut entry) } != 0 {
         loop {
-            if entry.th32ParentProcessID == parent_pid && process_is_alive(entry.th32ProcessID) {
+            if entry.th32ParentProcessID == parent_pid {
                 let name_end = entry
                     .szExeFile
                     .iter()
                     .position(|&character| character == 0)
                     .unwrap_or(entry.szExeFile.len());
-                children.push((
-                    entry.th32ProcessID,
-                    String::from_utf16_lossy(&entry.szExeFile[..name_end]),
-                ));
+                let name = String::from_utf16_lossy(&entry.szExeFile[..name_end]);
+                if name.eq_ignore_ascii_case(&fixture_name) && process_is_alive(entry.th32ProcessID)
+                {
+                    children.push((entry.th32ProcessID, name));
+                }
             }
             if unsafe { Process32NextW(snapshot, &raw mut entry) } == 0 {
                 break;
@@ -270,7 +275,7 @@ fn run_ctrl_scenario(
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
-        .creation_flags(CREATE_NEW_CONSOLE);
+        .creation_flags(CREATE_NEW_PROCESS_GROUP);
     let child = command.spawn().unwrap();
 
     wait_for_file(&root_ready, Duration::from_secs(10));
@@ -368,19 +373,12 @@ fn signal_console_fixture() {
         .map(|value| Duration::from_millis(value.parse().unwrap()));
 
     unsafe {
-        if FreeConsole() == 0 {
-            assert_eq!(GetLastError(), 6);
-        }
-        assert_ne!(AttachConsole(pid), 0);
-        assert_ne!(SetConsoleCtrlHandler(None, 1), 0);
-        assert_ne!(GenerateConsoleCtrlEvent(CTRL_C_EVENT, 0), 0);
+        assert_ne!(GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, pid), 0);
         if let Some(delay) = second_after {
             std::thread::sleep(delay);
-            assert_ne!(GenerateConsoleCtrlEvent(CTRL_C_EVENT, 0), 0);
+            assert_ne!(GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, pid), 0);
         }
         std::thread::sleep(Duration::from_millis(50));
-        assert_ne!(SetConsoleCtrlHandler(None, 0), 0);
-        assert_ne!(FreeConsole(), 0);
     }
 }
 

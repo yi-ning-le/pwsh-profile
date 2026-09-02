@@ -5,13 +5,14 @@ This repo contains a personal PowerShell profile. Treat the `profile/` tree as t
 ## Rules
 
 - Preserve the current p10k classic-inspired prompt appearance unless explicitly asked to change it.
-- Preserve the direct dependency policy: `ls`/`cat`/`grep` call `lsd`/`bat`/`rg` directly and should not gain fallback behavior.
+- Preserve the direct dependency policy: `ls`/`cat`/`grep`/`find`/`sdr` call `lsd`/`bat`/`rg`/`fd`/`sd` directly and should not gain fallback behavior.
 - Do not reintroduce `zoxide`, `fzf`, or `PSFzf` unless explicitly requested.
 - Keep interactive-only features gated to interactive ConsoleHost sessions, including `-NoExit -Command` sessions.
 - Keep async prompt updater scripts in `profile/profile.d/prompt-updaters` readable and source-controlled; do not move them back into generated cache scripts or large here-strings in `10-prompt.ps1`.
 - Preserve reftable compatibility by using Git plumbing for branch/ref identity instead of parsing `.git/HEAD` or files under `.git/refs`.
 - When adding profile part scripts, keep them under `profile/profile.d` so `scripts/install.ps1` syncs them recursively.
-- Preserve `jrun` interrupt semantics: the first Ctrl+C remains cooperative, a second Ctrl+C or the three-second deadline terminates the Job Object, and interrupted runs return 130. Keep `npm run` and `npm run-script` routed through the resolved `npm.cmd`; do not substitute `npm-cli.js` or `node --run`.
+- Preserve `jrun` interrupt semantics: the first Ctrl+C remains cooperative, a second Ctrl+C or the three-second deadline terminates the Job Object, and interrupted runs return 130. Keep `npm` and `npx` routed through `mise x -- node` with the resolved installation's `npm-cli.js`/`npx-cli.js`; do not fall back to the `npm.cmd`/`npx.cmd` batch wrappers or `node --run`, and keep `npm run`, `npm run-script`, and `npx` under `jrun`. Keep the npm script-shell environment (`npm_config_script_shell`, `MSYS_NO_PATHCONV`) scoped to the call rather than set for the session.
+- Keep winget dependencies unpinned so installs resolve the highest package versions available from the winget source.
 - Run Cargo for `jrun` from `profile/profile.d/job-runner` or set `CARGO_TARGET_DIR` outside `profile/`. Never leave `target/` inside the installable profile tree because the installer mirrors it recursively.
 - Measure startup impact before and after performance-related changes.
 

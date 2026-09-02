@@ -57,6 +57,8 @@ $checks = [ordered]@{
     DirectLsd = $content -match '(?s)function\s+ls\s*\{.*?\blsd\b'
     DirectBat = $content -match '(?s)function\s+cat\s*\{.*?\bbat\b'
     DirectRg = $content -match '(?s)function\s+grep\s*\{.*?\brg\b'
+    DirectFd = $content -match '(?s)function\s+find\s*\{.*?\bfd\b'
+    DirectSd = $content -match '(?s)function\s+sdr\s*\{.*?\bsd\b'
     NoGitInternalRefParsing = $content -notmatch '\.git[\\/](HEAD|refs)'
     NoLegacyScriptState = $content -notmatch '\$script:__[A-Za-z0-9_]+'
     NoGlobalInternalState = $content -notmatch '\$global:__(Async|LeanPrompt|Pwsh)[A-Za-z0-9_]*'
@@ -295,11 +297,11 @@ $expectedFunctions = @(
     'pwd', 'mkdir', '..', '...', '....'
     'g', 'gst', 'gss', 'ga', 'gaa', 'gco', 'gcb', 'gb', 'gc', 'gcmsg', 'gca'
     'gp', 'gl', 'gf', 'gd', 'gds', 'glog', 'gloga'
-    'cat', 'grep'
-    'which', 'whereis', 'touch', 'mkcd', 'head', 'tail'
+    'cat', 'grep', 'find'
+    'which', 'whereis', 'touch', 'mkcd', 'head', 'tail', 'sdr'
     'export', 'env', 'open', 'df', 'Update-Path'
 )
-$optionalFunctions = 'TabExpansion2', 'npm'
+$optionalFunctions = 'TabExpansion2', 'npm', 'npx'
 $actualFunctions = @($module.ExportedFunctions.Keys | Sort-Object)
 $missingFunctions = @($expectedFunctions | Where-Object { $_ -notin $actualFunctions })
 $unexpectedFunctions = @($actualFunctions | Where-Object { $_ -notin $expectedFunctions -and $_ -notin $optionalFunctions })
@@ -307,7 +309,7 @@ if ($missingFunctions.Count -or $unexpectedFunctions.Count) {
     throw "module function surface mismatch: missing=[$($missingFunctions -join ',')] unexpected=[$($unexpectedFunctions -join ',')]"
 }
 $actualAliases = @($module.ExportedAliases.Keys | Sort-Object)
-if (($actualAliases -join ',') -cne 'refreshenv,xdg-open') {
+if (($actualAliases -join ',') -cne 'refreshenv,vim,xdg-open') {
     throw "module alias surface mismatch: [$($actualAliases -join ',')]"
 }
 if (-not (Test-Path function:\reload)) { throw 'entry profile did not install the reload bridge' }
@@ -321,6 +323,25 @@ $leakedEntryVariables = @(Get-Variable -Scope Global | Where-Object Name -In $en
 if ($leakedEntryVariables.Count) {
     throw "profile leaked entry variables: [$($leakedEntryVariables.Name -join ',')]"
 }
+
+$sdrRoot = Join-Path $env:LOCALAPPDATA 'sdr-smoke'
+$sdrFile = Join-Path $sdrRoot 'input.txt'
+New-Item -ItemType Directory -Force -Path $sdrRoot | Out-Null
+Set-Content -LiteralPath $sdrFile -NoNewline -Value 'alpha. alphaX'
+sdr 'alpha.' 'beta$1' $sdrFile
+if ((Get-Content -LiteralPath $sdrFile -Raw) -cne 'beta$1 alphaX') { throw 'sdr literal replacement failed' }
+Set-Content -LiteralPath $sdrFile -NoNewline -Value 'name_v1'
+sdr -Regex '(\w+)_v1' '${1}_v2' $sdrFile
+if ((Get-Content -LiteralPath $sdrFile -Raw) -cne 'name_v2') { throw 'sdr regex replacement failed' }
+Set-Content -LiteralPath $sdrFile -NoNewline -Value 'keep'
+try {
+    sdr 'keep' 'changed' $sdrFile (Join-Path $sdrRoot 'missing.txt') 2>$null
+    throw 'sdr accepted an rg search error'
+}
+catch {
+    if ($_.Exception.Message -eq 'sdr accepted an rg search error') { throw }
+}
+if ((Get-Content -LiteralPath $sdrFile -Raw) -cne 'keep') { throw 'sdr modified files after an rg search error' }
 
 if (& $module { $script:State.Session.IsInteractive }) { throw 'redirected command session was classified as interactive' }
 if (Test-Path function:\Invoke-PwshCompletionAction) { throw 'PSReadLine profile part loaded in a batch command session' }
@@ -352,7 +373,7 @@ Set-Content -LiteralPath (Join-Path $jobSmokeRoot 'child.ps1') -Value @(
     'Start-Sleep -Seconds 30'
 )
 Set-Content -LiteralPath (Join-Path $jobSmokeRoot 'parent.ps1') -Value @(
-    '$child = Start-Process -FilePath (Join-Path $PSHOME ''pwsh.exe'') -ArgumentList @('
+    '$child = Start-Process -FilePath (Join-Path $PSHOME ''pwsh.exe'') -WindowStyle Hidden -ArgumentList @('
     '    ''-NoLogo'', ''-NoProfile'', ''-File'', (Join-Path $env:PWSH_JOB_SMOKE_ROOT ''child.ps1'')'
     ') -PassThru'
     '$deadline = [datetime]::UtcNow.AddSeconds(5)'
@@ -1449,44 +1470,75 @@ exit 0
     }
 
     $fakeNodeDir = Join-Path $testRoot 'fake-node'
-    New-Item -ItemType Directory -Force -Path $fakeNodeDir | Out-Null
+    New-Item -ItemType Directory -Force -Path (Join-Path $fakeNodeDir 'node_modules\npm\bin') | Out-Null
     $env:PWSH_NODE_LOG = Join-Path $fakeNodeDir 'calls.log'
-    Set-Content -LiteralPath (Join-Path $fakeNodeDir 'npm.cmd') -Encoding ASCII -Value @(
-        '@echo off'
-        'echo npm "%~1" "%~2">>"%PWSH_NODE_LOG%"'
-        'echo npm-job-ok'
-        'exit /b 0'
-    )
     Set-Content -LiteralPath (Join-Path $fakeNodeDir 'node.cmd') -Encoding ASCII -Value @(
         '@echo off'
         'echo node-cwd=%CD%>>"%PWSH_NODE_LOG%"'
         'echo v99.0.0'
         'exit /b 0'
     )
-    Set-Content -LiteralPath (Join-Path $fakeNodeDir 'npm.ps1') -Value "throw 'npm.ps1 must not handle npm run'"
+    # Fake mise: `x -- node -p process.execPath` reports the fake node installation; every other
+    # invocation logs its arguments plus the npm script-shell environment it received and prints a marker.
+    Set-Content -LiteralPath (Join-Path $fakeNodeDir 'mise.cmd') -Encoding ASCII -Value @(
+        '@echo off'
+        'if "%~4"=="-p" ('
+        '  echo %~dp0node.exe'
+        '  exit /b 0'
+        ')'
+        '>>"%PWSH_NODE_LOG%" echo mise %~1 %~2 %~3 %~4 %~5 %~6'
+        '>>"%PWSH_NODE_LOG%" echo script-shell=%npm_config_script_shell% pathconv=%MSYS_NO_PATHCONV%'
+        'echo cli-job-ok'
+        'exit /b 0'
+    )
+    foreach ($cliScript in 'npm-cli.js', 'npx-cli.js') {
+        New-Item -ItemType File -Force -Path (Join-Path $fakeNodeDir "node_modules\npm\bin\$cliScript") | Out-Null
+    }
+    Set-Content -LiteralPath (Join-Path $fakeNodeDir 'npm.cmd') -Encoding ASCII -Value '@echo npm.cmd must not handle npm>>"%PWSH_NODE_LOG%"'
+    Set-Content -LiteralPath (Join-Path $fakeNodeDir 'npx.cmd') -Encoding ASCII -Value '@echo npx.cmd must not handle npx>>"%PWSH_NODE_LOG%"'
     Copy-Item -LiteralPath $env:ComSpec -Destination (Join-Path $fakeNodeDir 'pnpm.exe')
     Set-Content -LiteralPath (Join-Path $fakeNodeDir 'pnpm.cmd') -Encoding ASCII -Value '@exit /b 0'
     $env:PATH = "$fakeNodeDir;$oldPath"
+    $env:PWSH_MISE_PATH = Join-Path $fakeNodeDir 'mise.cmd'
     $npmWrapperScript = @'
 $ErrorActionPreference = 'Stop'
 $WarningPreference = 'Stop'
 . $env:PWSH_PROFILE_SOURCE
 $module = Get-Module PwshProfile -ErrorAction Stop
-if (-not (Test-Path function:\npm)) { throw 'npm wrapper was not installed' }
+foreach ($wrapper in 'npm', 'npx') {
+    if (-not (Test-Path "function:\$wrapper")) { throw "$wrapper wrapper was not installed" }
+}
 $npmOutput = npm run build
-if ($npmOutput -cne 'npm-job-ok') { throw 'npm run was not routed through the job runner' }
-$resolvedNpm = & $module { (Resolve-PwshNativeCommand -Name 'npm').Source }
+if ($npmOutput -cne 'cli-job-ok') { throw 'npm run was not routed through the job runner' }
+$npxOutput = npx cowsay hello
+if ($npxOutput -cne 'cli-job-ok') { throw 'npx was not routed through the job runner' }
+if ($null -ne $env:npm_config_script_shell -or $null -ne $env:MSYS_NO_PATHCONV) {
+    throw 'npm script-shell environment leaked into the session'
+}
 $resolvedPnpm = & $module { (Resolve-PwshNativeCommand -Name 'pnpm').Source }
-if ([System.IO.Path]::GetExtension($resolvedNpm) -cne '.cmd' -or
-    [System.IO.Path]::GetExtension($resolvedPnpm) -cne '.exe') {
+if ([System.IO.Path]::GetExtension($resolvedPnpm) -cne '.exe') {
     throw 'native command extension preference was invalid'
 }
 exit 0
 '@
-    Invoke-PwshChecked -Name 'NpmWrapperSmoke' -Arguments @('-NoLogo', '-NoProfile', '-Command', $npmWrapperScript)
+    try {
+        Invoke-PwshChecked -Name 'NpmWrapperSmoke' -Arguments @('-NoLogo', '-NoProfile', '-Command', $npmWrapperScript)
+    }
+    finally {
+        Remove-Item Env:PWSH_MISE_PATH -ErrorAction SilentlyContinue
+    }
     $npmCalls = @(Get-Content -LiteralPath $env:PWSH_NODE_LOG)
-    if (@($npmCalls | Where-Object { $_ -ceq 'npm "run" "build"' }).Count -ne 1) {
+    $npmCli = Join-Path $fakeNodeDir 'node_modules\npm\bin\npm-cli.js'
+    $npxCli = Join-Path $fakeNodeDir 'node_modules\npm\bin\npx-cli.js'
+    if (@($npmCalls | Where-Object { $_ -ceq "mise x -- node $npmCli run build" }).Count -ne 1 -or
+        @($npmCalls | Where-Object { $_ -ceq "mise x -- node $npxCli cowsay hello" }).Count -ne 1) {
         throw "npm job-runner calls were invalid: [$($npmCalls -join '; ')]"
+    }
+    if (@($npmCalls | Where-Object { $_ -clike 'script-shell=*bash.exe pathconv=1' }).Count -ne 2) {
+        throw "npm script-shell environment was not applied: [$($npmCalls -join '; ')]"
+    }
+    if (@($npmCalls | Where-Object { $_ -clike 'np?.cmd must not handle*' }).Count) {
+        throw "npm.cmd/npx.cmd batch wrappers were invoked: [$($npmCalls -join '; ')]"
     }
     $env:PATH = $oldPath
 

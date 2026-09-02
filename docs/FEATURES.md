@@ -20,7 +20,7 @@ The `profile/` tree is the source of truth. The installed profile is a synchroni
 The following parts load in every supported session:
 
 - `15-job-object.ps1`: `jrun`, native command resolution, and discovery of the helper built by the installer.
-- `20-node.ps1`: the `npm` wrapper that routes `npm run` through the job runner.
+- `20-node.ps1`: the `npm` and `npx` wrappers that run npm's CLI through `mise` and the job runner.
 - `10-prompt.ps1`: prompt rendering, project-path logic, async status caches, and background process helpers.
 - `25-icons.ps1`: the on-demand Terminal-Icons helper.
 - `50-aliases.ps1`: navigation shortcuts, Git aliases, and direct modern CLI wrappers.
@@ -285,7 +285,9 @@ Commands that primarily complete refs or branches, such as checkout-style operat
 
 Node.js is provided by `mise` shims on the user `PATH`, so `node`, `npx`, and friends resolve like any other native command in every session type, including non-interactive shells and GUI-spawned processes. Version selection happens inside the shim at invocation time; the profile performs no version management.
 
-Only `npm` is wrapped, so `npm run` and `npm run-script` execute under the Job Object runner. All other arguments invoke the real executable directly.
+`npm` and `npx` are wrapped. Each call asks `mise x -- node -p process.execPath` for the Node installation that applies to the current directory (mise installs a pinned version on demand), then runs that installation's `npm-cli.js` or `npx-cli.js` through `mise x -- node`. The `npm.cmd` and `npx.cmd` batch wrappers are never used, so no `cmd.exe` batch layer sits between Ctrl+C and node and the `Terminate batch job (Y/N)?` prompt does not appear. `npm run`, `npm run-script`, and every `npx` invocation execute under the Job Object runner; other `npm` commands invoke the CLI directly.
+
+For the duration of a wrapped call, `npm_config_script_shell` points at Git Bash (`bin\bash.exe`, located from `git.exe`) and `MSYS_NO_PATHCONV=1` disables MSYS argument path conversion, so POSIX-style `package.json` scripts run unchanged and `/path` arguments reach tools intact. Both variables are restored afterwards, and an `npm_config_script_shell` value that already exists in the session is respected. `PWSH_MISE_PATH` overrides the `mise` executable, mirroring `PWSH_JRUN_PATH`.
 
 ### Native process-tree runner
 
@@ -295,7 +297,7 @@ The terminal's `CTRL_C_EVENT` is therefore delivered directly to the runner, roo
 
 `.cmd` and `.bat` targets run through `%ComSpec% /d /s /v:off /c`, so delayed expansion cannot rewrite literal `!NAME!` arguments. PowerShell scripts run through `pwsh -NoLogo -NoProfile -File`.
 
-The Rust 2024 helper uses direct `windows-sys` bindings and a static MSVC CRT. `scripts/install.ps1` compiles it into the staged `profile.d/job-runner` tree before replacing the active profile, so profile startup and command execution never invoke Cargo. `npm run` and `npm run-script` route the active installation's `npm.cmd` through `jrun`; other Node commands keep their direct invocation path.
+The Rust 2024 helper uses direct `windows-sys` bindings and a static MSVC CRT. `scripts/install.ps1` compiles it into the staged `profile.d/job-runner` tree before replacing the active profile, so profile startup and command execution never invoke Cargo. `npm run`, `npm run-script`, and `npx` route `mise x -- node` with npm's CLI scripts through `jrun`; other `npm` commands keep their direct invocation path.
 
 ## Commands, Aliases, and Helpers
 
@@ -350,9 +352,10 @@ All extra arguments are forwarded.
 
 - `cat` calls `bat --paging=never` and uses the OneHalfDark theme.
 - `grep` calls `rg` directly.
+- `find` calls `fd` directly. Note that `fd` uses `fd <pattern> [path]` syntax, not GNU find expressions, and the wrapper also shadows the unrelated Windows `find.exe`.
 - PowerShell's `curl` and `wget` aliases are removed so command resolution can reach real executables.
 
-`lsd`, `bat`, and `rg` are direct dependencies. Their wrappers intentionally fail visibly when the dependency is missing.
+`lsd`, `bat`, `rg`, `fd`, and `sd` are direct dependencies. Their wrappers intentionally fail visibly when the dependency is missing.
 
 ### Unix-Style Helpers
 
@@ -363,16 +366,20 @@ All extra arguments are forwarded.
 | `touch` | Create missing files or update timestamps |
 | `head` | Read the first `N` lines from files or pipeline input |
 | `tail` | Read the last `N` lines; `-f` follows a file |
+| `sdr` | Replace `Old` with `New` in every file `rg` matches, via `sd`; literal by default, `-Regex` enables Rust regex with `${1}` captures; extra arguments limit the search paths |
 | `export` | Set process environment variables from `NAME=value` arguments |
 | `env` | Print environment variables as `NAME=value` |
 | `open` | Open paths with the Windows default application |
 | `xdg-open` | Alias for `open` |
+| `vim` | Alias for the `vim.exe` bundled with Git for Windows |
 | `df` | Show mounted drive volumes |
 | `refreshenv` | Rebuild the process PATH from machine and user registry values |
 | `reload` | Refresh PATH and dot-source the installed profile again |
 | `icons` | Load Terminal-Icons on demand |
 
 ## Dependencies
+
+Use current stable releases; the dated version snapshot is maintained in the [README requirements](../README.md#requirements) to avoid duplicating version numbers here.
 
 Required commands:
 
@@ -381,6 +388,8 @@ Required commands:
 - `lsd`
 - `bat`
 - ripgrep (`rg`)
+- `fd`
+- `sd`
 - `mise`
 - Carapace
 - Rust MSVC toolchain (`cargo`), required while installing the profile and running the standard validation suite
@@ -478,7 +487,7 @@ Validation covers:
 - path routing, case preservation, hidden entries, slash handling, and interruption
 - Carapace lazy initialization and failure behavior
 - Git-aware path completion
-- npm wrapper job-runner routing and native command resolution
+- npm/npx wrapper routing through mise and the job runner, call-scoped script-shell environment, and native command resolution
 - installer validation, mirroring, rollback, locking, and backup behavior
 - batch and optional interactive startup benchmarks
 
@@ -489,7 +498,7 @@ The batch benchmark launches the repository source profile with `-NoProfile`; it
 The repository tests and agent policy protect these decisions:
 
 - Preserve the p10k classic-inspired prompt appearance unless deliberately changed.
-- Keep `ls`, `cat`, and `grep` as direct `lsd`, `bat`, and `rg` integrations without fallback implementations.
+- Keep `ls`, `cat`, `grep`, `find`, and `sdr` as direct `lsd`, `bat`, `rg`, `fd`, and `sd` integrations without fallback implementations.
 - Keep interactive-only code out of redirected and ordinary batch sessions.
 - Keep async updater scripts readable and source-controlled.
 - Use Git plumbing for ref identity instead of parsing Git internal files.
