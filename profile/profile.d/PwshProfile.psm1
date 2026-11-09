@@ -72,6 +72,7 @@ $profileParts = @(
     '25-icons.ps1'
     if ($script:State.Session.IsInteractive) {
         '30-psreadline.ps1'
+        '35-terminal.ps1'
         '40-completion.ps1'
     }
     '50-aliases.ps1',
@@ -98,6 +99,7 @@ $publicFunctions = @(
     'prompt', 'TabExpansion2', 'Set-LeanPromptSymbolSet', 'Test-LeanPromptGlyphs'
     'Invoke-JobProcess', 'jrun'
     'npm', 'npx'
+    'ssh', 'Reset-Terminal'
     'icons'
     'ls', 'l', 'll', 'la', 'lt'
     'pwd', 'mkdir', '..', '...', '....'
