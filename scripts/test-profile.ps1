@@ -301,7 +301,7 @@ $expectedFunctions = @(
     'which', 'whereis', 'touch', 'mkcd', 'head', 'tail', 'sdr'
     'export', 'env', 'open', 'df', 'Update-Path'
 )
-$optionalFunctions = 'TabExpansion2', 'npm', 'npx'
+$optionalFunctions = 'TabExpansion2', 'npm', 'npx', 'ssh', 'Reset-Terminal'
 $actualFunctions = @($module.ExportedFunctions.Keys | Sort-Object)
 $missingFunctions = @($expectedFunctions | Where-Object { $_ -notin $actualFunctions })
 $unexpectedFunctions = @($actualFunctions | Where-Object { $_ -notin $expectedFunctions -and $_ -notin $optionalFunctions })
@@ -344,6 +344,9 @@ catch {
 if ((Get-Content -LiteralPath $sdrFile -Raw) -cne 'keep') { throw 'sdr modified files after an rg search error' }
 
 if (& $module { $script:State.Session.IsInteractive }) { throw 'redirected command session was classified as interactive' }
+if ($module.ExportedFunctions.ContainsKey('ssh') -or $module.ExportedFunctions.ContainsKey('Reset-Terminal')) {
+    throw 'terminal recovery wrappers loaded in a batch command session'
+}
 if (Test-Path function:\Invoke-PwshCompletionAction) { throw 'PSReadLine profile part loaded in a batch command session' }
 if (Test-Path function:\__PwshZshDefaultTabExpansion2) { throw 'completion profile part loaded in a batch command session' }
 if (Get-EventSubscriber -SourceIdentifier 'PowerShell.OnIdle' -ErrorAction SilentlyContinue) {
@@ -736,6 +739,57 @@ $modulePath = Join-Path (Split-Path -Parent $env:PWSH_PROFILE_SOURCE) 'profile.d
 Remove-Module PwshProfile -Force
 Import-Module $modulePath -Global -ArgumentList $true
 $module = Get-Module PwshProfile -ErrorAction Stop
+& $module {
+    # ForceInteractive loads the functions for tests, but must not allow escape
+    # sequences into an actually redirected automation host.
+    if (Test-ProfileTerminalAttached) { throw 'redirected test host considered attached' }
+    if (@(Reset-Terminal -Clear).Count) { throw 'terminal reset emitted pipeline output' }
+
+    $terminalTest = @{ Resets = 0; ExitCode = 255; Throw = $false }
+    function Test-ProfileTerminalAttached { $true }
+    function Reset-Terminal { $terminalTest.Resets++ }
+    function ssh.exe {
+        if ($terminalTest.Throw) { throw 'simulated SSH launch failure' }
+        ConvertTo-Json -Compress -InputObject @($args)
+        & (Join-Path $PSHOME 'pwsh.exe') -NoLogo -NoProfile -Command "exit $($terminalTest.ExitCode)"
+    }
+    $sshArguments = @('-p', '2222', 'user@host', 'two words', 'quote"inside', '')
+    $sshOutput = ssh @sshArguments
+    if ($sshOutput -cne (ConvertTo-Json -Compress -InputObject $sshArguments)) {
+        throw 'SSH wrapper changed arguments or added stdout'
+    }
+    if ($global:LASTEXITCODE -ne 255 -or $terminalTest.Resets -ne 1) {
+        throw 'SSH wrapper lost exit code or cleanup'
+    }
+    $terminalTest.ExitCode = 0
+    $null = ssh host
+    if ($global:LASTEXITCODE -ne 0 -or $terminalTest.Resets -ne 2 -or
+        $script:State.Prompt.__LeanPromptStatusOverride -ne $true) {
+        throw 'successful SSH did not restore terminal and prompt status'
+    }
+    ssh host | Out-Null
+    if ($terminalTest.Resets -ne 2) { throw 'SSH output pipeline reset the terminal' }
+    'input' | ssh host | Out-Null
+    if ($terminalTest.Resets -ne 2) { throw 'SSH input pipeline reset the terminal' }
+    $terminalTest.Throw = $true
+    try { ssh host; throw 'SSH wrapper swallowed launch failure' }
+    catch {
+        if ($_.Exception.Message -ne 'simulated SSH launch failure') { throw }
+    }
+    if ($terminalTest.Resets -ne 3 -or $script:State.Prompt.__LeanPromptStatusOverride -ne $false) {
+        throw 'SSH launch exception skipped cleanup or failure status'
+    }
+    Remove-Item Function:ssh.exe
+    # Exercise a real native failure without connecting to any host. A PowerShell
+    # mock function does not propagate native $? like an executable does.
+    $PSNativeCommandUseErrorActionPreference = $false
+    $null = ssh -Z 2>$null
+    if ($global:LASTEXITCODE -ne 255 -or $terminalTest.Resets -ne 4 -or
+        $script:State.Prompt.__LeanPromptStatusOverride -ne $false) {
+        throw 'native SSH failure lost exit code, cleanup, or prompt status'
+    }
+    $script:State.Prompt.__LeanPromptStatusOverride = $null
+}
 & $module {
 function Assert-Equal([object]$Actual, [object]$Expected, [string]$Name) {
     if ($Actual -cne $Expected) { throw "$Name expected [$Expected], got [$Actual]" }

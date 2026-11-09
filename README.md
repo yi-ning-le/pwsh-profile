@@ -15,6 +15,7 @@ See [Feature Reference](docs/FEATURES.md) for a detailed description of runtime 
 - Git branch detection uses Git plumbing, so both files and reftable ref backends work.
 - Right-aligned toolchain versions and command duration when the terminal is wide enough.
 - PSReadLine history suggestions, prefix history search, and menu completion on the first Tab for interactive sessions.
+- Interactive `ssh` restores terminal display modes on exit, including connection failures, while preserving `$LASTEXITCODE` and prompt status. It does not clear the screen automatically. Use `Reset-Terminal -Clear` for manual recovery; use `ssh.exe` to bypass the wrapper. Pipeline calls skip automatic recovery, and batch sessions keep native SSH behavior.
 - Zsh-style path completion: `/` only inserts a separator, Tab performs case-insensitive segment-prefix completion, directories end in `/`, and hidden entries require an explicit `.` prefix.
 - Carapace external command completion, prewarmed on the first interactive idle, plus status-aware git path completion.
 - Node.js comes from `mise` shims on `PATH`; the profile wraps `npm` and `npx` to run npm's CLI through `mise x -- node` instead of the `.cmd` batch wrappers, with `npm run` and `npx` under the Job Object runner and npm scripts in Git Bash.
@@ -38,6 +39,7 @@ profile/profile.d/15-job-object.ps1          installed Rust helper discovery and
 profile/profile.d/20-node.ps1                npm/npx wrappers via mise and the job runner
 profile/profile.d/25-icons.ps1               on-demand Terminal-Icons helper
 profile/profile.d/30-psreadline.ps1          PSReadLine options, keybindings, duration tracking
+profile/profile.d/35-terminal.ps1            interactive SSH cleanup and Reset-Terminal
 profile/profile.d/40-completion.ps1          generic path routing, carapace cache, git path completion
 profile/profile.d/50-aliases.ps1             lsd/bat/rg/fd wrappers, git aliases, navigation helpers
 profile/profile.d/60-utils.ps1               small Unix-style utility functions

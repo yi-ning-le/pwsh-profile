@@ -16,6 +16,12 @@ This repo contains a personal PowerShell profile. Treat the `profile/` tree as t
 - Run Cargo for `jrun` from `profile/profile.d/job-runner` or set `CARGO_TARGET_DIR` outside `profile/`. Never leave `target/` inside the installable profile tree because the installer mirrors it recursively.
 - Measure startup impact before and after performance-related changes.
 
+## Delivery
+
+- After completing changes and passing the required validation, run `.\scripts\install.ps1` to install the validated profile to this machine before handing the work back to the user. This local installation is pre-authorized; do not ask for confirmation or leave installation as a manual step for the user.
+- Keep the installer's default backup behavior, verify the installed files match the validated source, and report installation success or any blocking error accurately.
+- Hand the installed result to the user for final interactive acceptance. Explain that existing terminals need `reload` (or `. $PROFILE`) and new PowerShell sessions load the installed profile automatically. Do not claim visual or interactive acceptance based only on automated tests.
+
 ## Validation
 
 Run:
@@ -37,3 +43,5 @@ From a real, unredirected Windows Terminal, measure interactive startup with:
 ```
 
 The test script recursively parses the entry profile and every `.ps1` file under `profile/profile.d`, runs the Rust `jrun` unit and real Windows process-tree integration tests, then runs policy checks, isolated smoke tests, and a batch startup benchmark. The optional interactive benchmark is intentionally unavailable in redirected automation.
+
+For terminal recovery changes, also run `.\scripts\test-terminal.ps1` in a disposable unredirected Windows console or a Windows ConPTY session (a PTY-enabled tool call is sufficient). It changes the test screen and checks actual cursor positions and scrolling margins; mocked cleanup calls alone do not validate terminal behavior.
